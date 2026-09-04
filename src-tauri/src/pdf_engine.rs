@@ -1,3 +1,4 @@
+use lopdf::content::Content;
 use lopdf::{Document, Object, ObjectId};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -519,15 +520,29 @@ pub fn is_image_stream(stream: &lopdf::Stream) -> bool {
         .unwrap_or(false)
 }
 
+/// Helper to check whether a stream's /Filter includes a given filter name or short abbreviation.
+pub fn stream_has_filter(stream: &lopdf::Stream, target: &[u8], short_target: &[u8]) -> bool {
+    if let Ok(filter_obj) = stream.dict.get(b"Filter") {
+        match filter_obj {
+            Object::Name(ref name) => name == target || name == short_target,
+            Object::Array(ref arr) => arr.iter().any(|item| {
+                if let Ok(name) = item.as_name() {
+                    name == target || name == short_target
+                } else {
+                    false
+                }
+            }),
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
 /// Helper to decode any supported image stream into a DynamicImage
 pub fn decode_image_stream(stream: &lopdf::Stream) -> Option<image::DynamicImage> {
     // Strategy 1: Load directly as JPEG if DCTDecode
-    let is_dct = stream
-        .dict
-        .get(b"Filter")
-        .and_then(|f| f.as_name())
-        .map(|n| n == b"DCTDecode")
-        .unwrap_or(false);
+    let is_dct = stream_has_filter(stream, b"DCTDecode", b"DCT");
 
     if is_dct {
         if let Ok(img) =
@@ -589,6 +604,208 @@ pub fn decode_image_stream(stream: &lopdf::Stream) -> Option<image::DynamicImage
     None
 }
 
+/// Decode raw PDF string bytes considering UTF-16BE BOM, ToUnicode CMap, multi-byte UTF-8, and font encodings.
+fn decode_pdf_string(bytes: &[u8], encoding: Option<&lopdf::Encoding>) -> String {
+    // 1. Check for UTF-16BE BOM: 0xFE, 0xFF
+    if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let u16_chars: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        if let Ok(s) = String::from_utf16(&u16_chars) {
+            return s;
+        }
+    }
+
+    // 2. If font has a ToUnicode map (UnicodeMapEncoding), that takes highest precedence
+    if let Some(enc @ lopdf::Encoding::UnicodeMapEncoding(_)) = encoding {
+        let mut out = String::new();
+        if enc.write_to_string(bytes, &mut out).is_ok() && !out.is_empty() {
+            return out;
+        }
+    }
+
+    // 3. Check if the raw bytes are valid UTF-8 with multi-byte characters
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        if s.chars().any(|c| c as u32 > 127) {
+            return s.to_string();
+        }
+    }
+
+    // 4. Use font's encoding if available
+    if let Some(enc) = encoding {
+        let mut out = String::new();
+        if enc.write_to_string(bytes, &mut out).is_ok() && !out.is_empty() {
+            return out;
+        }
+    }
+
+    // 5. Fallback to WinAnsi decoding for 8-bit Latin characters
+    let mut out = String::new();
+    let win_ansi = lopdf::Encoding::SimpleEncoding(b"WinAnsiEncoding");
+    if win_ansi.write_to_string(bytes, &mut out).is_ok() {
+        return out;
+    }
+
+    // 6. Final fallback: lossy utf-8
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Robust page text extractor that preserves line breaks and word spacing across PDF positioning operators.
+fn extract_page_text_clean(doc: &Document, page_num: u32) -> String {
+    let pages = doc.get_pages();
+    let page_id = match pages.get(&page_num) {
+        Some(id) => *id,
+        None => return String::new(),
+    };
+
+    let fonts = doc.get_page_fonts(page_id).unwrap_or_default();
+    let encodings: BTreeMap<Vec<u8>, lopdf::Encoding> = fonts
+        .into_iter()
+        .filter_map(|(name, font)| {
+            font.get_font_encoding(doc).ok().map(|enc| (name, enc))
+        })
+        .collect();
+
+    let content_data = doc.get_page_content(page_id);
+    if content_data.is_empty() {
+        return String::new();
+    }
+
+    let content = match Content::decode(&content_data) {
+        Ok(c) => c,
+        Err(_) => {
+            return doc.extract_text(&[page_num]).unwrap_or_default().trim().to_string();
+        }
+    };
+
+    let mut current_font_name: Option<Vec<u8>> = None;
+    let mut full_page = String::new();
+    let mut current_line = String::new();
+    let mut last_y: Option<f32> = None;
+
+    for op in &content.operations {
+        match op.operator.as_str() {
+            "Tf" => {
+                if let Some(first) = op.operands.first() {
+                    if let Ok(name) = first.as_name() {
+                        current_font_name = Some(name.to_vec());
+                    }
+                }
+            }
+            "Td" | "TD" => {
+                if op.operands.len() >= 2 {
+                    let ty = op.operands[1].as_float().unwrap_or_else(|_| op.operands[1].as_i64().unwrap_or(0) as f32);
+                    if ty.abs() > 0.1 {
+                        if !current_line.is_empty() {
+                            full_page.push_str(current_line.trim_end());
+                            full_page.push('\n');
+                            current_line.clear();
+                        }
+                    } else {
+                        let tx = op.operands[0].as_float().unwrap_or_else(|_| op.operands[0].as_i64().unwrap_or(0) as f32);
+                        if tx.abs() > 2.0 && !current_line.is_empty() && !current_line.ends_with(' ') {
+                            current_line.push(' ');
+                        }
+                    }
+                }
+            }
+            "Tm" => {
+                if op.operands.len() >= 6 {
+                    let y = op.operands[5].as_float().unwrap_or_else(|_| op.operands[5].as_i64().unwrap_or(0) as f32);
+                    if let Some(prev_y) = last_y {
+                        if (y - prev_y).abs() > 2.0 && !current_line.is_empty() {
+                            full_page.push_str(current_line.trim_end());
+                            full_page.push('\n');
+                            current_line.clear();
+                        }
+                    }
+                    last_y = Some(y);
+                }
+            }
+            "T*" | "'" => {
+                if !current_line.is_empty() {
+                    full_page.push_str(current_line.trim_end());
+                    full_page.push('\n');
+                    current_line.clear();
+                }
+                if op.operator == "'" {
+                    let enc = current_font_name.as_ref().and_then(|n| encodings.get(n));
+                    if let Some(Object::String(bytes, _)) = op.operands.first() {
+                        let text = decode_pdf_string(bytes, enc);
+                        current_line.push_str(&text);
+                    }
+                }
+            }
+            "\"" => {
+                if !current_line.is_empty() {
+                    full_page.push_str(current_line.trim_end());
+                    full_page.push('\n');
+                    current_line.clear();
+                }
+                let enc = current_font_name.as_ref().and_then(|n| encodings.get(n));
+                if let Some(Object::String(bytes, _)) = op.operands.get(2) {
+                    let text = decode_pdf_string(bytes, enc);
+                    current_line.push_str(&text);
+                }
+            }
+            "Tj" => {
+                let enc = current_font_name.as_ref().and_then(|n| encodings.get(n));
+                if let Some(Object::String(bytes, _)) = op.operands.first() {
+                    let text = decode_pdf_string(bytes, enc);
+                    current_line.push_str(&text);
+                }
+            }
+            "TJ" => {
+                let enc = current_font_name.as_ref().and_then(|n| encodings.get(n));
+                if let Some(Object::Array(items)) = op.operands.first() {
+                    for item in items {
+                        match item {
+                            Object::String(bytes, _) => {
+                                let text = decode_pdf_string(bytes, enc);
+                                current_line.push_str(&text);
+                            }
+                            Object::Integer(i)
+                                if *i < -120
+                                    && !current_line.is_empty()
+                                    && !current_line.ends_with(' ') =>
+                            {
+                                current_line.push(' ');
+                            }
+                            Object::Real(r)
+                                if *r < -120.0
+                                    && !current_line.is_empty()
+                                    && !current_line.ends_with(' ') =>
+                            {
+                                current_line.push(' ');
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "ET" if !current_line.is_empty() => {
+                full_page.push_str(current_line.trim_end());
+                full_page.push('\n');
+                current_line.clear();
+            }
+            _ => {}
+        }
+    }
+
+    if !current_line.is_empty() {
+        full_page.push_str(current_line.trim_end());
+        full_page.push('\n');
+    }
+
+    let trimmed = full_page.trim().to_string();
+    if trimmed.is_empty() {
+        doc.extract_text(&[page_num]).unwrap_or_default().trim().to_string()
+    } else {
+        trimmed
+    }
+}
+
 /// Helper to resolve dictionary from an Object (directly or via Reference)
 fn resolve_dict<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a lopdf::Dictionary> {
     match obj {
@@ -616,7 +833,7 @@ pub fn extract_text_content(
 
     for page_num in pages.keys() {
         full_text.push_str(&format!("----- Page {} -----\n\n", page_num));
-        let page_text = doc.extract_text(&[*page_num]).unwrap_or_default();
+        let page_text = extract_page_text_clean(&doc, *page_num);
         let trimmed = page_text.trim();
         if !trimmed.is_empty() {
             characters_extracted += trimmed.chars().count();
@@ -628,6 +845,15 @@ pub fn extract_text_content(
     }
 
     let is_scanned = characters_extracted == 0;
+
+    if is_scanned {
+        full_text = format!(
+            "No selectable text found — this may be a scanned document.\n\n\
+             This PDF document does not contain an embedded text layer across its {} page(s).\n\
+             Scanned documents require Optical Character Recognition (OCR) to extract text from images.\n",
+            total_pages
+        );
+    }
 
     std::fs::write(output_txt_path, full_text.as_bytes()).map_err(|e| {
         format!(
@@ -742,19 +968,8 @@ fn save_extracted_image(
     stream: &lopdf::Stream,
     output_dir: &Path,
 ) -> Result<String, String> {
-    let is_dct = stream
-        .dict
-        .get(b"Filter")
-        .and_then(|f| f.as_name())
-        .map(|n| n == b"DCTDecode")
-        .unwrap_or(false);
-
-    let is_jpx = stream
-        .dict
-        .get(b"Filter")
-        .and_then(|f| f.as_name())
-        .map(|n| n == b"JPXDecode")
-        .unwrap_or(false);
+    let is_dct = stream_has_filter(stream, b"DCTDecode", b"DCT");
+    let is_jpx = stream_has_filter(stream, b"JPXDecode", b"JPX");
 
     let filename = match page_num {
         Some(p) => {
@@ -1106,6 +1321,155 @@ mod tests {
         let stats = extract_text_content(&doc_path, &txt_path).unwrap();
         assert_eq!(stats.characters_extracted, 0);
         assert!(stats.is_scanned);
+
+        let contents = std::fs::read_to_string(&txt_path).unwrap();
+        assert!(
+            contents.contains("No selectable text found — this may be a scanned document."),
+            "Expected scanned document warning in file, got: {}",
+            contents
+        );
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_extract_text_unicode_and_layout() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_extract_unicode");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc_path = temp_dir.join("unicode_layout.pdf");
+        let txt_path = temp_dir.join("unicode_layout.txt");
+
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        });
+
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+        });
+
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 16.into()]),
+                Operation::new("Td", vec![50.into(), 700.into()]),
+                Operation::new("Tj", vec![Object::string_literal("Section 1: Overview")]),
+                Operation::new("Td", vec![0.into(), (-20).into()]),
+                Operation::new("Tj", vec![Object::string_literal("Café crème brûlée & résumé")]),
+                Operation::new("Td", vec![0.into(), (-20).into()]),
+                Operation::new("Tj", vec![Object::string_literal("Emoji rocket 🚀 success 🎉")]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+
+        let pages_dict = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&doc_path).unwrap();
+
+        let stats = extract_text_content(&doc_path, &txt_path).unwrap();
+        assert!(!stats.is_scanned);
+        assert!(stats.characters_extracted > 0);
+
+        let text = std::fs::read_to_string(&txt_path).unwrap();
+        assert!(text.contains("Section 1: Overview\nCafé crème brûlée & résumé"));
+        assert!(text.contains("Emoji rocket 🚀 success 🎉"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_extract_images_array_filter() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_extract_array_filter");
+        let out_dir = temp_dir.join("images_out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let doc_path = temp_dir.join("array_filter_doc.pdf");
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+
+        let dummy_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9];
+
+        let image_stream = Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 1,
+                "Height" => 1,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "Filter" => vec![Object::Name(b"DCTDecode".to_vec())],
+            },
+            dummy_jpeg,
+        );
+        let image_id = doc.add_object(image_stream);
+
+        let resources_id = doc.add_object(dictionary! {
+            "XObject" => dictionary! {
+                "Im1" => image_id,
+            },
+        });
+
+        let content = Content {
+            operations: vec![
+                Operation::new("q", vec![]),
+                Operation::new("Do", vec!["Im1".into()]),
+                Operation::new("Q", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+
+        let pages_dict = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&doc_path).unwrap();
+
+        let stats = extract_images_content(&doc_path, &out_dir).unwrap();
+        assert_eq!(stats.images_found, 1);
+        assert_eq!(stats.extracted_files.len(), 1);
+        assert!(stats.extracted_files[0].ends_with(".jpg"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
