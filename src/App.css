@@ -1279,3 +1279,223 @@ body,
   flex: 1;
 }
 
+/* ==========================================================================
+   Content Extraction Styles (Text & Images)
+   ========================================================================== */
+
+.extract-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.extraction-info-box {
+  background-color: var(--item-hover);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extraction-info-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-icon {
+  font-size: 14px;
+}
+
+.info-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.extraction-info-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.extraction-code-sample {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: #2563eb;
+  padding: 6px 12px;
+  border-radius: 6px;
+  width: fit-content;
+}
+
+@media (prefers-color-scheme: dark) {
+  .extraction-code-sample {
+    color: #93c5fd;
+  }
+}
+
+.extraction-info-subtext {
+  font-size: 11px;
+  color: var(--text-sub);
+  line-height: 1.4;
+}
+
+/* Extraction Result Panel */
+.extract-result-panel {
+  background-color: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: slideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .extract-result-panel {
+    background-color: #052e16;
+    border-color: #14532d;
+  }
+}
+
+/* Scanned Warning Banner */
+.scanned-warning-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background-color: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .scanned-warning-banner {
+    background-color: #451a03;
+    border-color: #78350f;
+    color: #fef3c7;
+  }
+}
+
+.scanned-warning-icon {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.scanned-warning-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scanned-warning-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: inherit;
+}
+
+.scanned-warning-desc {
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.9;
+  line-height: 1.45;
+}
+
+/* Extracted Path Box */
+.extracted-path-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.extracted-path-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.extracted-path-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
+/* Images Count Badge */
+.images-count-badge {
+  font-size: 13px;
+  font-weight: 800;
+  color: #15803d;
+  background-color: rgba(22, 163, 74, 0.15);
+  border: 1px solid rgba(22, 163, 74, 0.3);
+  padding: 4px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .images-count-badge {
+    color: #86efac;
+    background-color: rgba(34, 197, 94, 0.2);
+    border-color: rgba(34, 197, 94, 0.4);
+  }
+}
+
+/* Extracted Files List */
+.extracted-files-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.extracted-files-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.extracted-files-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.extracted-file-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.file-item-icon {
+  font-size: 12px;
+}
+
+.file-item-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-main);
+}
+
