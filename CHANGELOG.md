@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Merge/Split can no longer overwrite source PDFs
+- Fixed race conditions on rapid clicks and document switching
+
 ### Added
 - Rotate, reorder, and delete pages with thumbnail grid
 - Add customizable page numbers with live preview
