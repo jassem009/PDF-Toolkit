@@ -11,18 +11,26 @@ pub struct PdfFileInfo {
     pub page_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadFilesResult {
+    pub files: Vec<PdfFileInfo>,
+    pub errors: Vec<String>,
+}
+
 #[tauri::command]
-pub fn pick_pdf_files() -> Result<Vec<PdfFileInfo>, String> {
+pub fn pick_pdf_files() -> Result<LoadFilesResult, String> {
     let files = rfd::FileDialog::new()
         .add_filter("PDF files", &["pdf"])
         .pick_files();
 
     let paths = match files {
         Some(p) => p,
-        None => return Ok(Vec::new()),
+        None => return Ok(LoadFilesResult { files: Vec::new(), errors: Vec::new() }),
     };
 
-    let mut result = Vec::new();
+    let mut result_files = Vec::new();
+    let mut errors = Vec::new();
+
     for path in paths {
         let path_str = path.to_string_lossy().to_string();
         let name = path
@@ -32,7 +40,7 @@ pub fn pick_pdf_files() -> Result<Vec<PdfFileInfo>, String> {
 
         match pdf_engine::get_pdf_metadata(&path) {
             Ok((page_count, size)) => {
-                result.push(PdfFileInfo {
+                result_files.push(PdfFileInfo {
                     path: path_str,
                     name,
                     size,
@@ -40,21 +48,26 @@ pub fn pick_pdf_files() -> Result<Vec<PdfFileInfo>, String> {
                 });
             }
             Err(err) => {
-                eprintln!("Skipping invalid PDF {:?}: {}", path, err);
+                errors.push(err);
             }
         }
     }
 
-    Ok(result)
+    Ok(LoadFilesResult {
+        files: result_files,
+        errors,
+    })
 }
 
 #[tauri::command]
-pub fn inspect_pdf_files(paths: Vec<String>) -> Result<Vec<PdfFileInfo>, String> {
-    let mut result = Vec::new();
+pub fn inspect_pdf_files(paths: Vec<String>) -> Result<LoadFilesResult, String> {
+    let mut result_files = Vec::new();
+    let mut errors = Vec::new();
 
     for path_str in paths {
         let path = PathBuf::from(&path_str);
         if !path.exists() || !path.is_file() {
+            errors.push(format!("File not found: {}", path_str));
             continue;
         }
 
@@ -63,17 +76,25 @@ pub fn inspect_pdf_files(paths: Vec<String>) -> Result<Vec<PdfFileInfo>, String>
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown.pdf".to_string());
 
-        if let Ok((page_count, size)) = pdf_engine::get_pdf_metadata(&path) {
-            result.push(PdfFileInfo {
-                path: path_str,
-                name,
-                size,
-                page_count,
-            });
+        match pdf_engine::get_pdf_metadata(&path) {
+            Ok((page_count, size)) => {
+                result_files.push(PdfFileInfo {
+                    path: path_str,
+                    name,
+                    size,
+                    page_count,
+                });
+            }
+            Err(err) => {
+                errors.push(err);
+            }
         }
     }
 
-    Ok(result)
+    Ok(LoadFilesResult {
+        files: result_files,
+        errors,
+    })
 }
 
 #[tauri::command]
@@ -89,7 +110,7 @@ pub fn save_pdf_dialog(default_name: String) -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn merge_pdfs(input_paths: Vec<String>, output_path: String) -> Result<String, String> {
     if input_paths.len() < 2 {
-        return Err("Please select at least 2 PDF files to merge".to_string());
+        return Err("Please add at least 2 PDF files to perform a merge".to_string());
     }
 
     let input_path_bufs: Vec<PathBuf> = input_paths.iter().map(PathBuf::from).collect();

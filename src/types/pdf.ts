@@ -5,4 +5,9 @@ export interface PdfFileInfo {
   page_count: number;
 }
 
+export interface LoadFilesResult {
+  files: PdfFileInfo[];
+  errors: string[];
+}
+
 export type ActiveTab = "merge" | "split";

@@ -74,28 +74,55 @@ pub fn parse_page_range(range_str: &str, total_pages: usize) -> Result<Vec<u32>,
     Ok(sorted_pages)
 }
 
+/// Helper to load a PDF and verify it is not encrypted/password-protected.
+pub fn load_pdf_safely(path: &Path) -> Result<Document, String> {
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "PDF".to_string());
+
+    match Document::load(path) {
+        Ok(doc) => {
+            if doc.is_encrypted() {
+                return Err(format!(
+                    "'{}': password-protected PDFs are not supported yet",
+                    file_name
+                ));
+            }
+            Ok(doc)
+        }
+        Err(e) => {
+            let err_str = e.to_string().to_lowercase();
+            if err_str.contains("encrypt") || err_str.contains("password") {
+                return Err(format!(
+                    "'{}': password-protected PDFs are not supported yet",
+                    file_name
+                ));
+            }
+            Err(format!("Failed to load PDF '{}': {}", file_name, e))
+        }
+    }
+}
+
 /// Retrieve PDF page count and file size in bytes.
 pub fn get_pdf_metadata(path: &Path) -> Result<(usize, u64), String> {
     let metadata = std::fs::metadata(path)
         .map_err(|e| format!("Failed to read file metadata for {:?}: {}", path, e))?;
-    let doc = Document::load(path)
-        .map_err(|e| format!("Failed to load PDF {:?}: {}", path, e))?;
+    let doc = load_pdf_safely(path)?;
     let page_count = doc.get_pages().len();
     Ok((page_count, metadata.len()))
 }
 
 /// Merge multiple PDF documents into a single output PDF file.
 pub fn merge_documents(input_paths: &[PathBuf], output_path: &Path) -> Result<(), String> {
-    if input_paths.is_empty() {
-        return Err("No PDF files provided to merge".to_string());
+    if input_paths.len() < 2 {
+        return Err("Please add at least 2 PDF files to perform a merge".to_string());
     }
 
-    if input_paths.len() == 1 {
-        let mut doc = Document::load(&input_paths[0])
-            .map_err(|e| format!("Failed to load {:?}: {}", input_paths[0], e))?;
-        doc.save(output_path)
-            .map_err(|e| format!("Failed to save merged PDF: {}", e))?;
-        return Ok(());
+    let mut loaded_docs = Vec::new();
+    for path in input_paths {
+        let doc = load_pdf_safely(path)?;
+        loaded_docs.push(doc);
     }
 
     let mut max_id: u32 = 1;
@@ -103,10 +130,7 @@ pub fn merge_documents(input_paths: &[PathBuf], output_path: &Path) -> Result<()
     let mut documents_objects: BTreeMap<ObjectId, Object> = BTreeMap::new();
     let mut document = Document::with_version("1.5");
 
-    for path in input_paths {
-        let mut doc = Document::load(path)
-            .map_err(|e| format!("Failed to load {:?}: {}", path, e))?;
-
+    for mut doc in loaded_docs {
         doc.renumber_objects_with(max_id);
         max_id = doc.max_id + 1;
 
@@ -204,8 +228,7 @@ pub fn split_document(
         return Err("No pages specified to extract".to_string());
     }
 
-    let mut doc = Document::load(input_path)
-        .map_err(|e| format!("Failed to load PDF {:?}: {}", input_path, e))?;
+    let mut doc = load_pdf_safely(input_path)?;
 
     let all_pages: Vec<u32> = doc.get_pages().keys().copied().collect();
     let keep_set: HashSet<u32> = pages_to_keep.iter().copied().collect();
@@ -231,7 +254,7 @@ pub fn split_document(
 mod tests {
     use super::*;
     use lopdf::content::{Content, Operation};
-    use lopdf::{Stream, dictionary};
+    use lopdf::{dictionary, Stream};
 
     fn create_test_pdf(num_pages: usize, path: &Path) {
         let mut doc = Document::with_version("1.5");
@@ -288,6 +311,38 @@ mod tests {
         doc.save(path).unwrap();
     }
 
+    fn create_encrypted_pdf(path: &Path) {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        let pages_dict = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        let encrypt_id = doc.add_object(dictionary! {
+            "Filter" => "Standard",
+            "V" => 2,
+            "R" => 3,
+            "O" => Object::string_literal("dummy_owner_password_hash"),
+            "U" => Object::string_literal("dummy_user_password_hash"),
+            "P" => -4,
+        });
+
+        doc.trailer.set("Root", catalog_id);
+        doc.trailer.set("Encrypt", encrypt_id);
+        doc.save(path).unwrap();
+    }
+
     #[test]
     fn test_parse_page_range() {
         assert_eq!(parse_page_range("1-3", 5).unwrap(), vec![1, 2, 3]);
@@ -303,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_merge_and_split_documents() {
-        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test");
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_merge_split");
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let doc1 = temp_dir.join("doc1.pdf");
@@ -326,6 +381,26 @@ mod tests {
         split_document(&merged, &[2, 4], &split).unwrap();
         let (p_split, _) = get_pdf_metadata(&split).unwrap();
         assert_eq!(p_split, 2);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_encrypted_pdf_rejection() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_encrypted");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let enc_doc = temp_dir.join("encrypted.pdf");
+        create_encrypted_pdf(&enc_doc);
+
+        let result = get_pdf_metadata(&enc_doc);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("password-protected PDFs are not supported yet"),
+            "Expected password-protected message, got: {}",
+            err_msg
+        );
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

@@ -1,11 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { PdfFileInfo, ActiveTab } from "./types/pdf";
+import { PdfFileInfo, LoadFilesResult, ActiveTab } from "./types/pdf";
 import { FileList } from "./components/FileList";
 import { MergePanel } from "./components/MergePanel";
 import { SplitPanel } from "./components/SplitPanel";
 import "./App.css";
+
+interface ToastNotification {
+  type: "success" | "error" | "info";
+  message: string;
+}
 
 export function App() {
   const [files, setFiles] = useState<PdfFileInfo[]>([]);
@@ -13,13 +18,23 @@ export function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("merge");
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastNotification | null>(null);
 
-  // Clear notifications when switching tabs or files
-  const clearAlerts = useCallback(() => {
-    setStatusMessage(null);
-    setErrorMessage(null);
+  // Auto dismiss toast after 6s
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      setToast(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const showToast = useCallback((type: "success" | "error" | "info", message: string) => {
+    setToast({ type, message });
+  }, []);
+
+  const dismissToast = useCallback(() => {
+    setToast(null);
   }, []);
 
   // Add files ensuring unique paths
@@ -31,41 +46,66 @@ export function App() {
       if (filtered.length === 0) return prev;
       return [...prev, ...filtered];
     });
-    clearAlerts();
-  }, [clearAlerts]);
+  }, []);
 
   // Handle native file picker dialog
   const handlePickFiles = async () => {
     try {
-      clearAlerts();
-      const picked = await invoke<PdfFileInfo[]>("pick_pdf_files");
-      if (picked && picked.length > 0) {
-        addFiles(picked);
+      const result = await invoke<LoadFilesResult>("pick_pdf_files");
+      if (result.files && result.files.length > 0) {
+        addFiles(result.files);
+        if (result.errors && result.errors.length > 0) {
+          showToast("error", result.errors.join("; "));
+        } else {
+          showToast("success", `Added ${result.files.length} document${result.files.length > 1 ? "s" : ""}`);
+        }
+      } else if (result.errors && result.errors.length > 0) {
+        showToast("error", result.errors.join("; "));
       }
     } catch (err) {
-      setErrorMessage(`Failed to pick files: ${String(err)}`);
+      showToast("error", `Failed to pick files: ${String(err)}`);
     }
   };
 
   // Inspect paths dropped from desktop
   const handlePathsDropped = useCallback(async (paths: string[]) => {
     try {
-      clearAlerts();
       const pdfPaths = paths.filter((p) => p.toLowerCase().endsWith(".pdf"));
+      const nonPdfFiles = paths
+        .filter((p) => !p.toLowerCase().endsWith(".pdf"))
+        .map((p) => p.split(/[\\/]/).pop() || p);
+
       if (pdfPaths.length === 0) {
-        setErrorMessage("Only .pdf files are supported.");
+        const rejectedNames = nonPdfFiles.length > 0 ? `: ${nonPdfFiles.join(", ")}` : "";
+        showToast("error", `Only .pdf files are supported${rejectedNames}`);
         return;
       }
-      const inspected = await invoke<PdfFileInfo[]>("inspect_pdf_files", {
+
+      const result = await invoke<LoadFilesResult>("inspect_pdf_files", {
         paths: pdfPaths,
       });
-      if (inspected && inspected.length > 0) {
-        addFiles(inspected);
+
+      if (result.files && result.files.length > 0) {
+        addFiles(result.files);
+      }
+
+      const combinedErrors: string[] = [];
+      if (nonPdfFiles.length > 0) {
+        combinedErrors.push(`Ignored non-PDF files: ${nonPdfFiles.join(", ")}`);
+      }
+      if (result.errors && result.errors.length > 0) {
+        combinedErrors.push(...result.errors);
+      }
+
+      if (combinedErrors.length > 0) {
+        showToast("error", combinedErrors.join("; "));
+      } else if (result.files.length > 0) {
+        showToast("success", `Loaded ${result.files.length} document${result.files.length > 1 ? "s" : ""}`);
       }
     } catch (err) {
-      setErrorMessage(`Failed to load dropped files: ${String(err)}`);
+      showToast("error", `Failed to load dropped files: ${String(err)}`);
     }
-  }, [addFiles, clearAlerts]);
+  }, [addFiles, showToast]);
 
   // Set up Tauri native drag-drop listener
   useEffect(() => {
@@ -109,7 +149,6 @@ export function App() {
       return next;
     });
     setSelectedFileIndex((curr) => (curr === index ? index - 1 : curr === index - 1 ? index : curr));
-    clearAlerts();
   };
 
   const handleMoveDown = (index: number) => {
@@ -122,25 +161,25 @@ export function App() {
       return next;
     });
     setSelectedFileIndex((curr) => (curr === index ? index + 1 : curr === index + 1 ? index : curr));
-    clearAlerts();
   };
 
   const handleRemoveFile = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
     setSelectedFileIndex((curr) => (curr >= index ? Math.max(0, curr - 1) : curr));
-    clearAlerts();
   };
 
   const handleClearAll = () => {
     setFiles([]);
     setSelectedFileIndex(0);
-    clearAlerts();
+    showToast("info", "All loaded files cleared");
   };
 
   // Merge Action
   const handleMerge = async () => {
-    if (files.length < 2) return;
-    clearAlerts();
+    if (files.length < 2) {
+      showToast("error", "Please add at least 2 PDF files to perform a merge");
+      return;
+    }
 
     try {
       const savePath = await invoke<string | null>("save_pdf_dialog", {
@@ -156,9 +195,9 @@ export function App() {
         outputPath: savePath,
       });
 
-      setStatusMessage(result);
+      showToast("success", result);
     } catch (err) {
-      setErrorMessage(`Merge failed: ${String(err)}`);
+      showToast("error", `Merge failed: ${String(err)}`);
     } finally {
       setIsProcessing(false);
     }
@@ -167,8 +206,10 @@ export function App() {
   // Split Action
   const handleSplit = async (pageRange: string) => {
     const targetFile = files[selectedFileIndex];
-    if (!targetFile) return;
-    clearAlerts();
+    if (!targetFile) {
+      showToast("error", "Please select a PDF document to split");
+      return;
+    }
 
     try {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
@@ -187,9 +228,9 @@ export function App() {
         outputPath: savePath,
       });
 
-      setStatusMessage(result);
+      showToast("success", result);
     } catch (err) {
-      setErrorMessage(`Split failed: ${String(err)}`);
+      showToast("error", `Split failed: ${String(err)}`);
     } finally {
       setIsProcessing(false);
     }
@@ -197,6 +238,19 @@ export function App() {
 
   return (
     <div className="app-container">
+      {/* Toast Notification Popup */}
+      {toast && (
+        <div className={`toast-popup ${toast.type}`}>
+          <div className="toast-icon">
+            {toast.type === "success" ? "✓" : toast.type === "error" ? "⚠️" : "ℹ️"}
+          </div>
+          <div className="toast-message">{toast.message}</div>
+          <button className="toast-close" onClick={dismissToast} title="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Top Application Bar */}
       <header className="app-header">
         <div className="header-brand">
@@ -211,19 +265,13 @@ export function App() {
         <nav className="tab-nav">
           <button
             className={`tab-button ${activeTab === "merge" ? "active" : ""}`}
-            onClick={() => {
-              setActiveTab("merge");
-              clearAlerts();
-            }}
+            onClick={() => setActiveTab("merge")}
           >
             Merge PDFs
           </button>
           <button
             className={`tab-button ${activeTab === "split" ? "active" : ""}`}
-            onClick={() => {
-              setActiveTab("split");
-              clearAlerts();
-            }}
+            onClick={() => setActiveTab("split")}
           >
             Split PDF
           </button>
@@ -236,10 +284,7 @@ export function App() {
         <FileList
           files={files}
           selectedFileIndex={selectedFileIndex}
-          onSelectFile={(idx) => {
-            setSelectedFileIndex(idx);
-            clearAlerts();
-          }}
+          onSelectFile={(idx) => setSelectedFileIndex(idx)}
           onAddFiles={handlePickFiles}
           onRemoveFile={handleRemoveFile}
           onMoveUp={handleMoveUp}
@@ -257,21 +302,18 @@ export function App() {
               files={files}
               isProcessing={isProcessing}
               onMerge={handleMerge}
-              statusMessage={statusMessage}
-              errorMessage={errorMessage}
+              statusMessage={toast?.type === "success" ? toast.message : null}
+              errorMessage={toast?.type === "error" ? toast.message : null}
             />
           ) : (
             <SplitPanel
               files={files}
               selectedIndex={selectedFileIndex}
-              onSelectFile={(idx) => {
-                setSelectedFileIndex(idx);
-                clearAlerts();
-              }}
+              onSelectFile={(idx) => setSelectedFileIndex(idx)}
               isProcessing={isProcessing}
               onSplit={handleSplit}
-              statusMessage={statusMessage}
-              errorMessage={errorMessage}
+              statusMessage={toast?.type === "success" ? toast.message : null}
+              errorMessage={toast?.type === "error" ? toast.message : null}
             />
           )}
         </main>
