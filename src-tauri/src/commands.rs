@@ -27,6 +27,22 @@ pub struct CompressResult {
     pub output_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractTextResult {
+    pub pages_processed: usize,
+    pub characters_extracted: usize,
+    pub output_path: String,
+    pub is_scanned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractImagesResult {
+    pub pages_processed: usize,
+    pub images_found: usize,
+    pub output_folder: String,
+    pub extracted_files: Vec<String>,
+}
+
 #[tauri::command]
 pub fn pick_pdf_files() -> Result<LoadFilesResult, String> {
     let files = rfd::FileDialog::new()
@@ -185,6 +201,65 @@ pub fn compress_pdf(
     })
 }
 
+#[tauri::command]
+pub fn extract_pdf_text(
+    input_path: String,
+    output_path: String,
+) -> Result<ExtractTextResult, String> {
+    let in_path = PathBuf::from(&input_path);
+    if !in_path.exists() {
+        return Err(format!("File does not exist: {}", input_path));
+    }
+    let out_path = PathBuf::from(&output_path);
+
+    let stats = pdf_engine::extract_text_content(&in_path, &out_path)?;
+
+    Ok(ExtractTextResult {
+        pages_processed: stats.pages_processed,
+        characters_extracted: stats.characters_extracted,
+        output_path,
+        is_scanned: stats.is_scanned,
+    })
+}
+
+#[tauri::command]
+pub fn extract_pdf_images(
+    input_path: String,
+    output_folder: String,
+) -> Result<ExtractImagesResult, String> {
+    let in_path = PathBuf::from(&input_path);
+    if !in_path.exists() {
+        return Err(format!("File does not exist: {}", input_path));
+    }
+    let out_dir = PathBuf::from(&output_folder);
+
+    let stats = pdf_engine::extract_images_content(&in_path, &out_dir)?;
+
+    Ok(ExtractImagesResult {
+        pages_processed: stats.pages_processed,
+        images_found: stats.images_found,
+        output_folder,
+        extracted_files: stats.extracted_files,
+    })
+}
+
+#[tauri::command]
+pub fn save_txt_dialog(default_name: String) -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .add_filter("Text files", &["txt"])
+        .set_file_name(&default_name)
+        .save_file();
+
+    Ok(file.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub fn pick_folder_dialog() -> Result<Option<String>, String> {
+    let folder = rfd::FileDialog::new().pick_folder();
+
+    Ok(folder.map(|p| p.to_string_lossy().to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +388,52 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cannot overwrite the original file"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_extract_pdf_text_command() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_cmd_extract_text");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let in_pdf = temp_dir.join("input.pdf");
+        create_test_image_pdf(&in_pdf);
+
+        let out_txt = temp_dir.join("output.txt");
+        let result = extract_pdf_text(
+            in_pdf.to_string_lossy().to_string(),
+            out_txt.to_string_lossy().to_string(),
+        );
+
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats.pages_processed, 1);
+        assert!(out_txt.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_extract_pdf_images_command() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_cmd_extract_images");
+        let out_folder = temp_dir.join("images");
+        std::fs::create_dir_all(&out_folder).unwrap();
+
+        let in_pdf = temp_dir.join("input.pdf");
+        create_test_image_pdf(&in_pdf);
+
+        let result = extract_pdf_images(
+            in_pdf.to_string_lossy().to_string(),
+            out_folder.to_string_lossy().to_string(),
+        );
+
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats.pages_processed, 1);
+        assert_eq!(stats.images_found, 1);
+        assert_eq!(stats.extracted_files.len(), 1);
+        assert!(out_folder.join(&stats.extracted_files[0]).exists());
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
