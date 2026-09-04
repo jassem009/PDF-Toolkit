@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add customizable page numbers with live preview
 - Extract text from PDFs to .txt with page markers
 - Extract embedded images from PDFs to a chosen folder
 - PDF compression with quality presets and size savings report
