@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Extract text from PDFs to .txt with page markers
+- Extract embedded images from PDFs to a chosen folder
 - PDF compression with quality presets and size savings report
 - **Drag-and-Drop & File Picker**: Load multiple PDF documents via native system dialog (`rfd`) or direct desktop drag-and-drop into the application window.
 - **Document List & Sequencing**: Reorder loaded files with Move Up/Down controls to define the exact merge sequence, view page counts and formatted file sizes, and remove individual or all documents.
