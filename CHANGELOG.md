@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- PDF compression with quality presets and size savings report
 - **Drag-and-Drop & File Picker**: Load multiple PDF documents via native system dialog (`rfd`) or direct desktop drag-and-drop into the application window.
 - **Document List & Sequencing**: Reorder loaded files with Move Up/Down controls to define the exact merge sequence, view page counts and formatted file sizes, and remove individual or all documents.
 - **PDF Merging Engine**: Combine multiple PDF files into a single unified document using `lopdf`, with automatic object ID renumbering and catalog tree reconstruction.
