@@ -7,16 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- Merge/Split can no longer overwrite source PDFs
-- Fixed race conditions on rapid clicks and document switching
-
 ### Added
+- Progress bar for long operations
 - Rotate, reorder, and delete pages with thumbnail grid
 - Add customizable page numbers with live preview
 - Extract text from PDFs to .txt with page markers
 - Extract embedded images from PDFs to a chosen folder
 - PDF compression with quality presets and size savings report
+
+### Fixed
+- Dark mode on Organize Pages thumbnails
+- Merge/Split can no longer overwrite source PDFs
+- Fixed race conditions on rapid clicks and document switching
+
+### Changed
+- Consolidated duplicated save-dialog and alert code into shared utilities
+- Replaced default app icons, added Content Security Policy
 - **Drag-and-Drop & File Picker**: Load multiple PDF documents via native system dialog (`rfd`) or direct desktop drag-and-drop into the application window.
 - **Document List & Sequencing**: Reorder loaded files with Move Up/Down controls to define the exact merge sequence, view page counts and formatted file sizes, and remove individual or all documents.
 - **PDF Merging Engine**: Combine multiple PDF files into a single unified document using `lopdf`, with automatic object ID renumbering and catalog tree reconstruction.
