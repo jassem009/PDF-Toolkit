@@ -10,4 +10,14 @@ export interface LoadFilesResult {
   errors: string[];
 }
 
-export type ActiveTab = "merge" | "split";
+export interface CompressResult {
+  original_size: number;
+  compressed_size: number;
+  bytes_saved: number;
+  percentage_saved: number;
+  images_compressed: number;
+  output_path: string;
+}
+
+export type ActiveTab = "merge" | "split" | "compress";
+export type CompressionQuality = "low" | "medium" | "high";
