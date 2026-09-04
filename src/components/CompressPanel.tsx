@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { PdfFileInfo, CompressionQuality, CompressResult } from "../types/pdf";
 import { formatBytes } from "../lib/format-bytes";
+import { AlertBanner } from "./AlertBanner";
 
 interface CompressPanelProps {
   files: PdfFileInfo[];
@@ -23,7 +24,7 @@ interface QualityOption {
   details: string;
 }
 
-export const QUALITY_OPTIONS: QualityOption[] = [
+const QUALITY_OPTIONS: QualityOption[] = [
   {
     id: "low",
     title: "Low Quality",
@@ -240,47 +241,32 @@ export const CompressPanel: React.FC<CompressPanelProps> = ({
 
       {/* Persistent Inline Well-Compressed Alert */}
       {isWellCompressedMessage && (
-        <div className="alert-banner info well-compressed-banner">
-          <span className="alert-icon">ℹ️</span>
+        <AlertBanner
+          type="info"
+          className="well-compressed-banner"
+          onDismiss={onClearError}
+        >
           <div className="well-compressed-content">
             <strong>This PDF is already well-compressed.</strong>
             <p className="well-compressed-text">
               Its images and data streams are already optimally encoded. Exporting further would not reduce size without corrupting clarity.
             </p>
           </div>
-          <button
-            className="alert-dismiss-btn"
-            onClick={onClearError}
-            title="Dismiss message"
-          >
-            ✕
-          </button>
-        </div>
+        </AlertBanner>
       )}
 
       {/* Persistent General Error Status */}
       {compressError && !isWellCompressedMessage && (
-        <div className="alert-banner error">
-          <span className="alert-icon">⚠️</span>
-          <div className="alert-error-content">
-            <span>{compressError}</span>
-          </div>
-          <button
-            className="alert-dismiss-btn"
-            onClick={onClearError}
-            title="Dismiss error"
-          >
-            ✕
-          </button>
-        </div>
+        <AlertBanner
+          type="error"
+          message={compressError}
+          onDismiss={onClearError}
+        />
       )}
 
       {/* General Success Status Message */}
       {statusMessage && !compressResult && (
-        <div className="alert-banner success">
-          <span className="alert-icon">✓</span>
-          <span>{statusMessage}</span>
-        </div>
+        <AlertBanner type="success" message={statusMessage} />
       )}
 
       <div className="card-footer">

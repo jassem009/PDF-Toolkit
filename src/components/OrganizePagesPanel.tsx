@@ -9,6 +9,7 @@ import {
 } from "../types/pdf";
 import { LazyPageThumbnail } from "./LazyPageThumbnail";
 import { DeletePagesConfirmDialog } from "./DeletePagesConfirmDialog";
+import { promptSavePdf } from "../lib/dialogs";
 
 interface OrganizePagesPanelProps {
   files: PdfFileInfo[];
@@ -293,9 +294,7 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
     let outputPath: string | null = null;
     try {
       setIsSaveDialogOpen(true);
-      outputPath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      outputPath = await promptSavePdf(defaultName);
     } catch (err) {
       onErrorToast("Save dialog error: " + err);
       return;

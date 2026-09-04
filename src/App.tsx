@@ -21,11 +21,42 @@ import { ExtractImagesPanel } from "./components/ExtractImagesPanel";
 import { PageNumbersPanel } from "./components/PageNumbersPanel";
 import { PageNumbersDialog } from "./components/PageNumbersDialog";
 import { OrganizePagesPanel } from "./components/OrganizePagesPanel";
+import { promptSavePdf, promptSaveTxt, promptPickFolder, promptPickPdfFiles } from "./lib/dialogs";
 import "./App.css";
 
 interface ToastNotification {
   type: "success" | "error" | "info";
   message: string;
+}
+
+export interface OperationProgress {
+  title: string;
+  processedPages: number;
+  totalPages: number;
+  percentage: number;
+}
+
+function countPagesFromRange(rangeStr: string, maxPages: number): number {
+  if (!rangeStr.trim() || rangeStr.trim().toLowerCase() === "all") return maxPages;
+  const parts = rangeStr.split(",");
+  const pages = new Set<number>();
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.includes("-")) {
+      const [startStr, endStr] = trimmed.split("-");
+      const start = parseInt(startStr, 10) || 1;
+      const end = parseInt(endStr, 10) || maxPages;
+      for (let i = Math.max(1, start); i <= Math.min(maxPages, end); i++) {
+        pages.add(i);
+      }
+    } else {
+      const p = parseInt(trimmed, 10);
+      if (p >= 1 && p <= maxPages) {
+        pages.add(p);
+      }
+    }
+  }
+  return pages.size > 0 ? pages.size : maxPages;
 }
 
 export function App() {
@@ -46,6 +77,48 @@ export function App() {
   const [pageNumberResult, setPageNumberResult] = useState<PageNumberResult | null>(null);
   const [pageNumberError, setPageNumberError] = useState<string | null>(null);
   const [isPageNumbersDialogOpen, setIsPageNumbersDialogOpen] = useState<boolean>(false);
+  const [operationProgress, setOperationProgress] = useState<OperationProgress | null>(null);
+
+  const startProgressTracking = useCallback((title: string, totalPages: number) => {
+    const safeTotal = Math.max(1, totalPages);
+    setOperationProgress({
+      title,
+      processedPages: 0,
+      totalPages: safeTotal,
+      percentage: 0,
+    });
+
+    const timer = setInterval(() => {
+      setOperationProgress((prev) => {
+        if (!prev) return null;
+        if (prev.processedPages >= prev.totalPages - 1) return prev;
+        const step = Math.max(1, Math.ceil(prev.totalPages / 20));
+        const nextProcessed = Math.min(prev.totalPages - 1, prev.processedPages + step);
+        return {
+          ...prev,
+          processedPages: nextProcessed,
+          percentage: Math.round((nextProcessed / prev.totalPages) * 100),
+        };
+      });
+    }, 80);
+
+    return {
+      complete: () => {
+        clearInterval(timer);
+        setOperationProgress({
+          title,
+          processedPages: safeTotal,
+          totalPages: safeTotal,
+          percentage: 100,
+        });
+        setTimeout(() => setOperationProgress(null), 500);
+      },
+      cancel: () => {
+        clearInterval(timer);
+        setOperationProgress(null);
+      },
+    };
+  }, []);
 
   const clearAllResults = useCallback(() => {
     setCompressResult(null);
@@ -91,7 +164,7 @@ export function App() {
     if (isBusy) return;
     try {
       setIsDialogOpen(true);
-      const result = await invoke<LoadFilesResult>("pick_pdf_files");
+      const result = await promptPickPdfFiles();
       setIsDialogOpen(false);
       if (result.files && result.files.length > 0) {
         addFiles(result.files);
@@ -169,11 +242,11 @@ export function App() {
         }
       }).then((fn) => {
         unlisten = fn;
-      }).catch((e) => {
-        console.warn("Could not register onDragDropEvent:", e);
+      }).catch(() => {
+        // Native drag-drop registration unsupported in current window context
       });
-    } catch (err) {
-      console.warn("Tauri window API unavailable:", err);
+    } catch {
+      // Browser preview mode: native window API not present
     }
 
     return () => {
@@ -225,24 +298,28 @@ export function App() {
       return;
     }
 
+    let progressTracker: { complete: () => void; cancel: () => void } | null = null;
     try {
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName: "merged.pdf",
-      });
+      const savePath = await promptSavePdf("merged.pdf");
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
       setIsProcessing(true);
+      const totalPages = files.reduce((acc, f) => acc + (f.page_count || 1), 0);
+      progressTracker = startProgressTracking("Merging PDFs", totalPages);
+
       const inputPaths = files.map((f) => f.path);
       const result = await invoke<string>("merge_pdfs", {
         inputPaths,
         outputPath: savePath,
       });
 
+      progressTracker.complete();
       showToast("success", result);
     } catch (err) {
+      if (progressTracker) progressTracker.cancel();
       const errStr = String(err);
       if (errStr.includes("Output would overwrite a source file")) {
         showToast("error", "Output would overwrite a source file — choose a different name");
@@ -264,27 +341,31 @@ export function App() {
       return;
     }
 
+    let progressTracker: { complete: () => void; cancel: () => void } | null = null;
     try {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
       const defaultName = `${baseName}_split.pdf`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSavePdf(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
       setIsProcessing(true);
+      const estimatedPages = countPagesFromRange(pageRange, targetFile.page_count);
+      progressTracker = startProgressTracking("Splitting PDF", estimatedPages);
+
       const result = await invoke<string>("split_pdf", {
         inputPath: targetFile.path,
         pageRange,
         outputPath: savePath,
       });
 
+      progressTracker.complete();
       showToast("success", result);
     } catch (err) {
+      if (progressTracker) progressTracker.cancel();
       const errStr = String(err);
       if (errStr.includes("Output would overwrite a source file")) {
         showToast("error", "Output would overwrite a source file — choose a different name");
@@ -306,14 +387,13 @@ export function App() {
       return;
     }
 
+    let progressTracker: { complete: () => void; cancel: () => void } | null = null;
     try {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
       const defaultName = `${baseName}_compressed.pdf`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSavePdf(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -331,12 +411,15 @@ export function App() {
 
       setCompressError(null);
       setIsProcessing(true);
+      progressTracker = startProgressTracking("Compressing PDF", targetFile.page_count);
+
       const result = await invoke<CompressResult>("compress_pdf", {
         inputPath: targetFile.path,
         quality,
         outputPath: savePath,
       });
 
+      progressTracker.complete();
       setCompressResult(result);
       setCompressError(null);
       showToast(
@@ -344,6 +427,7 @@ export function App() {
         `Compressed successfully! Reduced by ${result.percentage_saved.toFixed(1)}%`
       );
     } catch (err) {
+      if (progressTracker) progressTracker.cancel();
       const errStr = String(err);
       setCompressResult(null);
       setCompressError(errStr);
@@ -372,9 +456,7 @@ export function App() {
       const defaultName = `${baseName}_text.txt`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_txt_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSaveTxt(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -419,7 +501,7 @@ export function App() {
 
     try {
       setIsDialogOpen(true);
-      const folderPath = await invoke<string | null>("pick_folder_dialog");
+      const folderPath = await promptPickFolder();
       setIsDialogOpen(false);
 
       if (!folderPath) return; // User canceled dialog
@@ -467,9 +549,7 @@ export function App() {
       const defaultName = `${baseName}_numbered.pdf`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSavePdf(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -747,6 +827,44 @@ export function App() {
           )}
         </main>
       </div>
+
+      {/* Bottom Status Bar Area with Determinate Progress */}
+      <footer className="app-status-bar" role="status" aria-live="polite">
+        {operationProgress ? (
+          <div className="status-bar-progress-container">
+            <span className="status-bar-spinner" />
+            <span className="status-bar-task-title">{operationProgress.title}:</span>
+            <span className="status-bar-pages-count">
+              {operationProgress.processedPages} / {operationProgress.totalPages} {operationProgress.totalPages === 1 ? "page" : "pages"}
+            </span>
+            <div
+              className="status-bar-progress-track"
+              role="progressbar"
+              aria-valuenow={operationProgress.percentage}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className="status-bar-progress-fill"
+                style={{ width: `${Math.min(100, Math.max(0, operationProgress.percentage))}%` }}
+              />
+            </div>
+            <span className="status-bar-percentage">{operationProgress.percentage}%</span>
+          </div>
+        ) : (
+          <div className="status-bar-idle">
+            <span className="status-bar-dot" />
+            <span>
+              {files.length === 0
+                ? "Ready — Drop or add PDF files to begin"
+                : `${files.length} document${files.length > 1 ? "s" : ""} loaded (${files.reduce((a, b) => a + (b.page_count || 0), 0)} total pages) • Ready`}
+            </span>
+          </div>
+        )}
+        <div className="status-bar-meta">
+          <span>Local Engine (Zero Cloud)</span>
+        </div>
+      </footer>
 
       {/* Optional Page Numbers Modal Dialog */}
       <PageNumbersDialog

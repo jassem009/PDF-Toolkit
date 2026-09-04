@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { PdfFileInfo } from "../types/pdf";
 import { parsePageRangeClient } from "../lib/page-range";
+import { AlertBanner } from "./AlertBanner";
 
 interface SplitPanelProps {
   files: PdfFileInfo[];
@@ -164,19 +165,8 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({
         </div>
       )}
 
-      {statusMessage && (
-        <div className="alert-banner success">
-          <span className="alert-icon">✓</span>
-          <span>{statusMessage}</span>
-        </div>
-      )}
-
-      {errorMessage && (
-        <div className="alert-banner error">
-          <span className="alert-icon">⚠️</span>
-          <span>{errorMessage}</span>
-        </div>
-      )}
+      <AlertBanner type="success" message={statusMessage} />
+      <AlertBanner type="error" message={errorMessage} />
 
       <div className="card-footer">
         <button

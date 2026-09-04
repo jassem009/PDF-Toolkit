@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="pageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <linearGradient id="badgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EF4444"/>
+      <stop offset="100%" stop-color="#DC2626"/>
+    </linearGradient>
+    <linearGradient id="foldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E2E8F0"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Document Sheet -->
+  <path d="M 240 120
+           L 640 120
+           L 820 300
+           L 820 860
+           A 48 48 0 0 1 772 908
+           L 252 908
+           A 48 48 0 0 1 204 860
+           L 204 168
+           A 48 48 0 0 1 252 120 Z"
+        fill="url(#pageGrad)"
+        stroke="#94A3B8"
+        stroke-width="24"
+        stroke-linejoin="round" />
+
+  <!-- Folded Corner -->
+  <path d="M 640 120
+           L 640 252
+           A 48 48 0 0 0 688 300
+           L 820 300 Z"
+        fill="url(#foldGrad)"
+        stroke="#94A3B8"
+        stroke-width="24"
+        stroke-linejoin="round" />
+
+  <!-- Sheet Skeleton Content Lines -->
+  <rect x="284" y="380" width="456" height="40" rx="20" fill="#CBD5E1" />
+  <rect x="284" y="460" width="340" height="40" rx="20" fill="#E2E8F0" />
+  <rect x="284" y="540" width="410" height="40" rx="20" fill="#E2E8F0" />
+
+  <!-- Red Brand Badge -->
+  <rect x="240" y="640" width="440" height="180" rx="36" fill="url(#badgeGrad)" />
+  <text x="460" y="772"
+        font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+        font-size="112"
+        font-weight="900"
+        letter-spacing="6"
+        fill="#FFFFFF"
+        text-anchor="middle">PDF</text>
+</svg>
