@@ -17,6 +17,16 @@ pub struct LoadFilesResult {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressResult {
+    pub original_size: u64,
+    pub compressed_size: u64,
+    pub bytes_saved: u64,
+    pub percentage_saved: f64,
+    pub images_compressed: usize,
+    pub output_path: String,
+}
+
 #[tauri::command]
 pub fn pick_pdf_files() -> Result<LoadFilesResult, String> {
     let files = rfd::FileDialog::new()
@@ -147,4 +157,30 @@ pub fn split_pdf(
         pages_to_keep.len(),
         output_path
     ))
+}
+
+#[tauri::command]
+pub fn compress_pdf(
+    input_path: String,
+    quality: String,
+    output_path: String,
+) -> Result<CompressResult, String> {
+    let in_path = PathBuf::from(&input_path);
+    if !in_path.exists() {
+        return Err(format!("File does not exist: {}", input_path));
+    }
+
+    let level: pdf_engine::CompressionLevel = quality.parse()?;
+    let out_path = PathBuf::from(&output_path);
+
+    let stats = pdf_engine::compress_document(&in_path, level, &out_path)?;
+
+    Ok(CompressResult {
+        original_size: stats.original_size,
+        compressed_size: stats.compressed_size,
+        bytes_saved: stats.bytes_saved,
+        percentage_saved: stats.percentage_saved,
+        images_compressed: stats.images_compressed,
+        output_path,
+    })
 }

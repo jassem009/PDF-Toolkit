@@ -18,6 +18,7 @@ pub fn run() {
             commands::save_pdf_dialog,
             commands::merge_pdfs,
             commands::split_pdf,
+            commands::compress_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
