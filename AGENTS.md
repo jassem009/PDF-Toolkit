@@ -63,11 +63,8 @@ PDF-Toolkit/
 ├── public/                   # Static web assets (favicons, logos)
 ├── src/                      # React TypeScript Frontend
 │   ├── assets/               # Local icons, vectors, and graphics
-│   ├── components/           # UI Components
-│   │   ├── ui/               # Reusable atomic/shadcn-style primitives (Button, Modal, Input)
-│   │   └── features/         # Domain-specific tool views (Merge, Split, Rotate, Compress)
-│   ├── hooks/                # Custom React hooks (e.g., useTauriCommand, useDropzone)
-│   ├── lib/                  # Frontend utilities and Tauri IPC wrappers
+│   ├── components/           # UI Components (Feature panels, modals, dialogs, alerts)
+│   ├── lib/                  # Frontend utilities, dialog wrappers, formatters
 │   ├── types/                # Shared TypeScript interfaces & types
 │   ├── App.tsx               # Root application component
 │   ├── App.css               # App-level styles
@@ -75,10 +72,11 @@ PDF-Toolkit/
 │   └── index.css             # Design tokens and base styles
 ├── src-tauri/                # Rust Native Application
 │   ├── src/
-│   │   ├── commands/         # Modular command handlers (pdf, file, window)
+│   │   ├── commands.rs       # Modular command handlers (file pickers, PDF operations, dialogs)
+│   │   ├── pdf_engine.rs     # Core PDF manipulation engine (lopdf, image processing)
 │   │   ├── lib.rs            # Builder configuration, plugin registration, handlers
 │   │   └── main.rs           # Windows subsystem release entry point
-│   ├── icons/                # Multi-platform application icons (.ico, .icns, .png)
+│   ├── icons/                # Multi-platform application icons (.ico, .icns, .png, vector source)
 │   ├── Cargo.toml            # Rust dependencies & package metadata
 │   ├── tauri.conf.json       # Tauri window, security, and bundle configuration
 │   └── capabilities/         # Tauri 2 permission capabilities

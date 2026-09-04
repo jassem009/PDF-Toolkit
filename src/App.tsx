@@ -242,11 +242,11 @@ export function App() {
         }
       }).then((fn) => {
         unlisten = fn;
-      }).catch((e) => {
-        console.warn("Could not register onDragDropEvent:", e);
+      }).catch(() => {
+        // Native drag-drop registration unsupported in current window context
       });
-    } catch (err) {
-      console.warn("Tauri window API unavailable:", err);
+    } catch {
+      // Browser preview mode: native window API not present
     }
 
     return () => {
