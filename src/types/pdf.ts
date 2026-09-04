@@ -19,5 +19,19 @@ export interface CompressResult {
   output_path: string;
 }
 
-export type ActiveTab = "merge" | "split" | "compress";
+export interface ExtractTextResult {
+  pages_processed: number;
+  characters_extracted: number;
+  output_path: string;
+  is_scanned: boolean;
+}
+
+export interface ExtractImagesResult {
+  pages_processed: number;
+  images_found: number;
+  output_folder: string;
+  extracted_files: string[];
+}
+
+export type ActiveTab = "merge" | "split" | "compress" | "extract-text" | "extract-images";
 export type CompressionQuality = "low" | "medium" | "high";

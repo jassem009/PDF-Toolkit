@@ -1,11 +1,21 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { PdfFileInfo, LoadFilesResult, ActiveTab, CompressResult, CompressionQuality } from "./types/pdf";
+import {
+  PdfFileInfo,
+  LoadFilesResult,
+  ActiveTab,
+  CompressResult,
+  CompressionQuality,
+  ExtractTextResult,
+  ExtractImagesResult,
+} from "./types/pdf";
 import { FileList } from "./components/FileList";
 import { MergePanel } from "./components/MergePanel";
 import { SplitPanel } from "./components/SplitPanel";
 import { CompressPanel } from "./components/CompressPanel";
+import { ExtractTextPanel } from "./components/ExtractTextPanel";
+import { ExtractImagesPanel } from "./components/ExtractImagesPanel";
 import "./App.css";
 
 interface ToastNotification {
@@ -22,6 +32,19 @@ export function App() {
   const [toast, setToast] = useState<ToastNotification | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
   const [compressError, setCompressError] = useState<string | null>(null);
+  const [extractTextResult, setExtractTextResult] = useState<ExtractTextResult | null>(null);
+  const [extractTextError, setExtractTextError] = useState<string | null>(null);
+  const [extractImagesResult, setExtractImagesResult] = useState<ExtractImagesResult | null>(null);
+  const [extractImagesError, setExtractImagesError] = useState<string | null>(null);
+
+  const clearAllResults = useCallback(() => {
+    setCompressResult(null);
+    setCompressError(null);
+    setExtractTextResult(null);
+    setExtractTextError(null);
+    setExtractImagesResult(null);
+    setExtractImagesError(null);
+  }, []);
 
   // Auto dismiss toast after 6s
   useEffect(() => {
@@ -296,6 +319,93 @@ export function App() {
     }
   };
 
+  // Extract Text Action
+  const handleExtractText = async () => {
+    const targetFile = files[selectedFileIndex];
+    if (!targetFile) {
+      showToast("error", "Please select a PDF document to extract text");
+      return;
+    }
+
+    try {
+      const baseName = targetFile.name.replace(/\.pdf$/i, "");
+      const defaultName = `${baseName}_text.txt`;
+
+      const savePath = await invoke<string | null>("save_txt_dialog", {
+        defaultName,
+      });
+
+      if (!savePath) return; // User canceled dialog
+
+      setExtractTextError(null);
+      setIsProcessing(true);
+      const result = await invoke<ExtractTextResult>("extract_pdf_text", {
+        inputPath: targetFile.path,
+        outputPath: savePath,
+      });
+
+      setExtractTextResult(result);
+      setExtractTextError(null);
+
+      if (result.is_scanned) {
+        showToast("info", "No selectable text found — this may be a scanned document.");
+      } else {
+        showToast(
+          "success",
+          `Extracted text from ${result.pages_processed} page${result.pages_processed === 1 ? "" : "s"} (${result.characters_extracted.toLocaleString()} characters)`
+        );
+      }
+    } catch (err) {
+      const errStr = String(err);
+      setExtractTextResult(null);
+      setExtractTextError(errStr);
+      showToast("error", `Text extraction failed: ${errStr}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Extract Images Action
+  const handleExtractImages = async () => {
+    const targetFile = files[selectedFileIndex];
+    if (!targetFile) {
+      showToast("error", "Please select a PDF document to extract images");
+      return;
+    }
+
+    try {
+      const folderPath = await invoke<string | null>("pick_folder_dialog");
+
+      if (!folderPath) return; // User canceled dialog
+
+      setExtractImagesError(null);
+      setIsProcessing(true);
+      const result = await invoke<ExtractImagesResult>("extract_pdf_images", {
+        inputPath: targetFile.path,
+        outputFolder: folderPath,
+      });
+
+      setExtractImagesResult(result);
+      setExtractImagesError(null);
+
+      if (result.images_found === 0) {
+        showToast("info", "No embedded images found in this PDF document");
+      } else {
+        showToast(
+          "success",
+          `Found and saved ${result.images_found} image${result.images_found === 1 ? "" : "s"} across ${result.pages_processed} page${result.pages_processed === 1 ? "" : "s"}`
+        );
+      }
+    } catch (err) {
+      const errStr = String(err);
+      setExtractImagesResult(null);
+      setExtractImagesError(errStr);
+      showToast("error", `Image extraction failed: ${errStr}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="app-container">
       {/* Toast Notification Popup */}
@@ -341,6 +451,18 @@ export function App() {
           >
             Compress PDF
           </button>
+          <button
+            className={`tab-button ${activeTab === "extract-text" ? "active" : ""}`}
+            onClick={() => setActiveTab("extract-text")}
+          >
+            Extract Text
+          </button>
+          <button
+            className={`tab-button ${activeTab === "extract-images" ? "active" : ""}`}
+            onClick={() => setActiveTab("extract-images")}
+          >
+            Extract Images
+          </button>
         </nav>
       </header>
 
@@ -352,21 +474,18 @@ export function App() {
           selectedFileIndex={selectedFileIndex}
           onSelectFile={(idx) => {
             setSelectedFileIndex(idx);
-            setCompressResult(null);
-            setCompressError(null);
+            clearAllResults();
           }}
           onAddFiles={handlePickFiles}
           onRemoveFile={(idx) => {
             handleRemoveFile(idx);
-            setCompressResult(null);
-            setCompressError(null);
+            clearAllResults();
           }}
           onMoveUp={handleMoveUp}
           onMoveDown={handleMoveDown}
           onClearAll={() => {
             handleClearAll();
-            setCompressResult(null);
-            setCompressError(null);
+            clearAllResults();
           }}
           isDragging={isDragging}
           setIsDragging={setIsDragging}
@@ -390,8 +509,7 @@ export function App() {
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
                 setSelectedFileIndex(idx);
-                setCompressResult(null);
-                setCompressError(null);
+                clearAllResults();
               }}
               isProcessing={isProcessing}
               onSplit={handleSplit}
@@ -405,8 +523,7 @@ export function App() {
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
                 setSelectedFileIndex(idx);
-                setCompressResult(null);
-                setCompressError(null);
+                clearAllResults();
               }}
               isProcessing={isProcessing}
               onCompress={handleCompress}
@@ -414,6 +531,40 @@ export function App() {
               onResetResult={() => setCompressResult(null)}
               compressError={compressError}
               onClearError={() => setCompressError(null)}
+              statusMessage={toast?.type === "success" ? toast.message : null}
+            />
+          )}
+          {activeTab === "extract-text" && (
+            <ExtractTextPanel
+              files={files}
+              selectedIndex={selectedFileIndex}
+              onSelectFile={(idx) => {
+                setSelectedFileIndex(idx);
+                clearAllResults();
+              }}
+              isProcessing={isProcessing}
+              onExtractText={handleExtractText}
+              extractResult={extractTextResult}
+              onResetResult={() => setExtractTextResult(null)}
+              errorMessage={extractTextError}
+              onClearError={() => setExtractTextError(null)}
+              statusMessage={toast?.type === "success" ? toast.message : null}
+            />
+          )}
+          {activeTab === "extract-images" && (
+            <ExtractImagesPanel
+              files={files}
+              selectedIndex={selectedFileIndex}
+              onSelectFile={(idx) => {
+                setSelectedFileIndex(idx);
+                clearAllResults();
+              }}
+              isProcessing={isProcessing}
+              onExtractImages={handleExtractImages}
+              extractResult={extractImagesResult}
+              onResetResult={() => setExtractImagesResult(null)}
+              errorMessage={extractImagesError}
+              onClearError={() => setExtractImagesError(null)}
               statusMessage={toast?.type === "success" ? toast.message : null}
             />
           )}
