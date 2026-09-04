@@ -58,6 +58,26 @@ pub struct PageNumberResult {
     pub output_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageOrganizeActionDto {
+    pub original_page_number: u32,
+    pub rotation: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDetailsDto {
+    pub page_number: u32,
+    pub rotation: i64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizePagesResult {
+    pub pages_processed: usize,
+    pub output_path: String,
+}
+
 #[tauri::command]
 pub fn pick_pdf_files() -> Result<LoadFilesResult, String> {
     let files = rfd::FileDialog::new()
@@ -304,6 +324,53 @@ pub fn add_page_numbers(
     })
 }
 
+#[tauri::command]
+pub fn get_pdf_pages_details(input_path: String) -> Result<Vec<PageDetailsDto>, String> {
+    let in_path = PathBuf::from(&input_path);
+    if !in_path.exists() {
+        return Err(format!("File does not exist: {}", input_path));
+    }
+
+    let details = pdf_engine::get_pdf_pages_details(&in_path)?;
+    Ok(details
+        .into_iter()
+        .map(|d| PageDetailsDto {
+            page_number: d.page_number,
+            rotation: d.rotation,
+            width: d.width,
+            height: d.height,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn organize_pdf_pages(
+    input_path: String,
+    output_path: String,
+    pages: Vec<PageOrganizeActionDto>,
+) -> Result<OrganizePagesResult, String> {
+    let in_path = PathBuf::from(&input_path);
+    if !in_path.exists() {
+        return Err(format!("File does not exist: {}", input_path));
+    }
+    let out_path = PathBuf::from(&output_path);
+
+    let engine_actions: Vec<pdf_engine::PageOrganizeAction> = pages
+        .into_iter()
+        .map(|p| pdf_engine::PageOrganizeAction {
+            original_page_number: p.original_page_number,
+            rotation: p.rotation,
+        })
+        .collect();
+
+    let stats = pdf_engine::organize_pdf_pages(&in_path, &out_path, &engine_actions)?;
+
+    Ok(OrganizePagesResult {
+        pages_processed: stats.pages_processed,
+        output_path: stats.output_path,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,6 +575,37 @@ mod tests {
         assert!(result.is_ok());
         let stats = result.unwrap();
         assert_eq!(stats.pages_processed, 1);
+        assert!(out_pdf.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_organize_pdf_pages_command() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_cmd_organize");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let in_pdf = temp_dir.join("input.pdf");
+        create_test_image_pdf(&in_pdf);
+
+        let details = get_pdf_pages_details(in_pdf.to_string_lossy().to_string()).unwrap();
+        assert_eq!(details.len(), 1);
+
+        let out_pdf = temp_dir.join("output_organized.pdf");
+        let pages = vec![PageOrganizeActionDto {
+            original_page_number: 1,
+            rotation: 90,
+        }];
+
+        let result = organize_pdf_pages(
+            in_pdf.to_string_lossy().to_string(),
+            out_pdf.to_string_lossy().to_string(),
+            pages,
+        );
+
+        assert!(result.is_ok());
+        let res = result.unwrap();
+        assert_eq!(res.pages_processed, 1);
         assert!(out_pdf.exists());
 
         let _ = std::fs::remove_dir_all(temp_dir);
