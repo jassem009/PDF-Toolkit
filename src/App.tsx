@@ -21,6 +21,7 @@ import { ExtractImagesPanel } from "./components/ExtractImagesPanel";
 import { PageNumbersPanel } from "./components/PageNumbersPanel";
 import { PageNumbersDialog } from "./components/PageNumbersDialog";
 import { OrganizePagesPanel } from "./components/OrganizePagesPanel";
+import { promptSavePdf, promptSaveTxt, promptPickFolder, promptPickPdfFiles } from "./lib/dialogs";
 import "./App.css";
 
 interface ToastNotification {
@@ -91,7 +92,7 @@ export function App() {
     if (isBusy) return;
     try {
       setIsDialogOpen(true);
-      const result = await invoke<LoadFilesResult>("pick_pdf_files");
+      const result = await promptPickPdfFiles();
       setIsDialogOpen(false);
       if (result.files && result.files.length > 0) {
         addFiles(result.files);
@@ -227,9 +228,7 @@ export function App() {
 
     try {
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName: "merged.pdf",
-      });
+      const savePath = await promptSavePdf("merged.pdf");
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -269,9 +268,7 @@ export function App() {
       const defaultName = `${baseName}_split.pdf`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSavePdf(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -311,9 +308,7 @@ export function App() {
       const defaultName = `${baseName}_compressed.pdf`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSavePdf(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -372,9 +367,7 @@ export function App() {
       const defaultName = `${baseName}_text.txt`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_txt_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSaveTxt(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
@@ -419,7 +412,7 @@ export function App() {
 
     try {
       setIsDialogOpen(true);
-      const folderPath = await invoke<string | null>("pick_folder_dialog");
+      const folderPath = await promptPickFolder();
       setIsDialogOpen(false);
 
       if (!folderPath) return; // User canceled dialog
@@ -467,9 +460,7 @@ export function App() {
       const defaultName = `${baseName}_numbered.pdf`;
 
       setIsDialogOpen(true);
-      const savePath = await invoke<string | null>("save_pdf_dialog", {
-        defaultName,
-      });
+      const savePath = await promptSavePdf(defaultName);
       setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog

@@ -1,6 +1,7 @@
 import React from "react";
 import { PdfFileInfo, ExtractTextResult } from "../types/pdf";
 import { formatBytes } from "../lib/format-bytes";
+import { AlertBanner } from "./AlertBanner";
 
 interface ExtractTextPanelProps {
   files: PdfFileInfo[];
@@ -142,29 +143,18 @@ export const ExtractTextPanel: React.FC<ExtractTextPanelProps> = ({
         </div>
       )}
 
-      {/* Error status banner */}
+      {/* Error alert banner */}
       {errorMessage && (
-        <div className="alert-banner error">
-          <span className="alert-icon">⚠️</span>
-          <div className="alert-error-content">
-            <span>{errorMessage}</span>
-          </div>
-          <button
-            className="alert-dismiss-btn"
-            onClick={onClearError}
-            title="Dismiss error"
-          >
-            ✕
-          </button>
-        </div>
+        <AlertBanner
+          type="error"
+          message={errorMessage}
+          onDismiss={onClearError}
+        />
       )}
 
       {/* Success status banner */}
       {statusMessage && !extractResult && (
-        <div className="alert-banner success">
-          <span className="alert-icon">✓</span>
-          <span>{statusMessage}</span>
-        </div>
+        <AlertBanner type="success" message={statusMessage} />
       )}
 
       <div className="card-footer">

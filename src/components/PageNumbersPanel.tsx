@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { PdfFileInfo, PageNumberPosition, PageNumberOptions, PageNumberResult } from "../types/pdf";
 import { evaluatePageNumberFormat } from "../lib/format-page-number";
+import { AlertBanner } from "./AlertBanner";
 
 interface PageNumbersPanelProps {
   files: PdfFileInfo[];
@@ -13,7 +14,7 @@ interface PageNumbersPanelProps {
   errorMessage: string | null;
   pageNumberResult: PageNumberResult | null;
   onResetResult: () => void;
-  onOpenDialog?: () => void;
+  onOpenDialog: () => void;
 }
 
 const POSITION_OPTIONS: { id: PageNumberPosition; label: string; shortLabel: string }[] = [
@@ -79,7 +80,7 @@ export const PageNumbersPanel: React.FC<PageNumbersPanelProps> = ({
             <h2 className="card-title">Add Page Numbers</h2>
             <span className="card-badge">Stamping</span>
           </div>
-          {onOpenDialog && files.length > 0 && (
+          {files.length > 0 && (
             <button
               type="button"
               className="secondary-button"
@@ -324,16 +325,8 @@ export const PageNumbersPanel: React.FC<PageNumbersPanelProps> = ({
           </div>
 
           {/* Success / Error Banners */}
-          {statusMessage && (
-            <div className="status-callout success">
-              <span>✓ {statusMessage}</span>
-            </div>
-          )}
-          {errorMessage && (
-            <div className="status-callout error">
-              <span>⚠️ {errorMessage}</span>
-            </div>
-          )}
+          <AlertBanner type="success" message={statusMessage} />
+          <AlertBanner type="error" message={errorMessage} />
 
           {/* Result Panel */}
           {pageNumberResult && (
