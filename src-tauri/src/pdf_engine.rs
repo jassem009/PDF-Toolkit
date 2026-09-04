@@ -1,5 +1,5 @@
-use lopdf::content::Content;
-use lopdf::{Document, Object, ObjectId};
+use lopdf::content::{Content, Operation};
+use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -68,6 +68,50 @@ pub struct ImageExtractionStats {
     pub images_found: usize,
     pub output_folder: String,
     pub extracted_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageNumberPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl std::str::FromStr for PageNumberPosition {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('_', "-").trim() {
+            "top-left" | "topleft" => Ok(Self::TopLeft),
+            "top-center" | "topcenter" | "top-middle" => Ok(Self::TopCenter),
+            "top-right" | "topright" => Ok(Self::TopRight),
+            "bottom-left" | "bottomleft" => Ok(Self::BottomLeft),
+            "bottom-center" | "bottomcenter" | "bottom-middle" => Ok(Self::BottomCenter),
+            "bottom-right" | "bottomright" => Ok(Self::BottomRight),
+            _ => Err(format!(
+                "Invalid position '{}'. Expected one of: top-left, top-center, top-right, bottom-left, bottom-center, bottom-right.",
+                s
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PageNumberOptions {
+    pub position: PageNumberPosition,
+    pub font_size: f32,
+    pub start_number: u32,
+    pub format: String,
+    pub margin: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PageNumberStats {
+    pub pages_processed: usize,
+    pub output_path: String,
 }
 
 /// Parse a page range string like "1-5", "2, 4, 6-8", or "3" into a sorted list of unique 1-based page numbers.
@@ -1010,6 +1054,455 @@ fn save_extracted_image(
     Ok(filename)
 }
 
+/// Calculate estimated text width for Helvetica font in points.
+pub fn helvetica_text_width(text: &str, font_size: f32) -> f32 {
+    let width_units: f32 = text
+        .chars()
+        .map(|c| match c {
+            ' ' => 278.0,
+            '!' | '\'' | ',' | '.' | ':' | ';' | 'i' | 'l' | '|' => 278.0,
+            '(' | ')' | '[' | ']' | '{' | '}' | '`' | 't' | 'f' | 'I' => 333.0,
+            '-' | 'r' | 'J' => 389.0,
+            '"' | '*' | 's' | 'z' => 444.0,
+            'a' | 'b' | 'c' | 'd' | 'e' | 'g' | 'h' | 'k' | 'n' | 'o' | 'p' | 'q' | 'u' | 'v'
+            | 'x' | 'y' | '0'..='9' | '$' | '?' => 556.0,
+            'P' | 'B' | 'E' | 'F' | 'K' | 'L' | 'R' | 'S' | 'T' | 'V' | 'X' | 'Y' | 'Z' => 667.0,
+            'A' | 'C' | 'D' | 'G' | 'H' | 'N' | 'O' | 'Q' | 'U' => 722.0,
+            'w' => 722.0,
+            'M' | 'm' => 833.0,
+            'W' => 944.0,
+            '%' => 889.0,
+            _ => 500.0,
+        })
+        .sum();
+    (width_units / 1000.0) * font_size
+}
+
+/// Helper function to format page numbers based on a custom template.
+pub fn format_page_number(template: &str, current_page_num: u32, total_pages: usize) -> String {
+    let trimmed = template.trim();
+    if trimmed.is_empty() {
+        return current_page_num.to_string();
+    }
+
+    let mut result = trimmed.to_string();
+
+    // Replace explicit token placeholders
+    result = result.replace("{page}", &current_page_num.to_string());
+    result = result.replace("{PAGE}", &current_page_num.to_string());
+    result = result.replace("{p}", &current_page_num.to_string());
+    result = result.replace("{n}", &current_page_num.to_string());
+    result = result.replace("{total}", &total_pages.to_string());
+    result = result.replace("{TOTAL}", &total_pages.to_string());
+    result = result.replace("{count}", &total_pages.to_string());
+
+    // Replace standalone token words 'X' / 'x' and 'Y' / 'y'
+    result = replace_standalone_token(&result, 'X', &current_page_num.to_string());
+    result = replace_standalone_token(&result, 'x', &current_page_num.to_string());
+    result = replace_standalone_token(&result, 'Y', &total_pages.to_string());
+    result = replace_standalone_token(&result, 'y', &total_pages.to_string());
+
+    result
+}
+
+fn replace_standalone_token(text: &str, token: char, replacement: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let len = chars.len();
+
+    for i in 0..len {
+        if chars[i] == token {
+            let prev_boundary = if i == 0 {
+                true
+            } else {
+                !chars[i - 1].is_alphanumeric()
+            };
+            let next_boundary = if i + 1 == len {
+                true
+            } else {
+                !chars[i + 1].is_alphanumeric()
+            };
+
+            if prev_boundary && next_boundary {
+                out.push_str(replacement);
+                continue;
+            }
+        }
+        out.push(chars[i]);
+    }
+    out
+}
+
+fn resolve_page_mediabox(doc: &Document, mut current_id: ObjectId) -> (f64, f64, f64, f64) {
+    for _ in 0..10 {
+        if let Ok(obj) = doc.get_object(current_id) {
+            if let Ok(dict) = obj.as_dict() {
+                if let Ok(mb_obj) = dict.get(b"MediaBox") {
+                    if let Some(arr) = resolve_array_ref(doc, mb_obj) {
+                        if arr.len() >= 4 {
+                            let x0 = arr[0]
+                                .as_float()
+                                .map(|v| v as f64)
+                                .or_else(|_| arr[0].as_i64().map(|v| v as f64))
+                                .unwrap_or(0.0);
+                            let y0 = arr[1]
+                                .as_float()
+                                .map(|v| v as f64)
+                                .or_else(|_| arr[1].as_i64().map(|v| v as f64))
+                                .unwrap_or(0.0);
+                            let x1 = arr[2]
+                                .as_float()
+                                .map(|v| v as f64)
+                                .or_else(|_| arr[2].as_i64().map(|v| v as f64))
+                                .unwrap_or(612.0);
+                            let y1 = arr[3]
+                                .as_float()
+                                .map(|v| v as f64)
+                                .or_else(|_| arr[3].as_i64().map(|v| v as f64))
+                                .unwrap_or(792.0);
+                            return (x0, y0, x1, y1);
+                        }
+                    }
+                }
+                if let Ok(parent_obj) = dict.get(b"Parent") {
+                    if let Ok(parent_id) = parent_obj.as_reference() {
+                        current_id = parent_id;
+                        continue;
+                    }
+                }
+            }
+        }
+        break;
+    }
+    (0.0, 0.0, 612.0, 792.0)
+}
+
+fn resolve_array_ref<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Vec<Object>> {
+    match obj {
+        Object::Array(ref arr) => Some(arr),
+        Object::Reference(ref id) => {
+            if let Ok(Object::Array(ref arr)) = doc.get_object(*id) {
+                return Some(arr);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn ensure_font_in_page_resources(
+    doc: &mut Document,
+    page_id: ObjectId,
+    font_alias: &str,
+    font_id: ObjectId,
+) -> Result<(), String> {
+    let (has_resources, resources_ref) = {
+        let page_obj = doc
+            .get_object(page_id)
+            .map_err(|e| format!("Could not get page object {:?}: {}", page_id, e))?;
+        let page_dict = page_obj
+            .as_dict()
+            .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+
+        if !page_dict.has(b"Resources") {
+            (false, None)
+        } else {
+            match page_dict.get(b"Resources") {
+                Ok(Object::Reference(r_id)) => (true, Some(*r_id)),
+                _ => (true, None),
+            }
+        }
+    };
+
+    if !has_resources {
+        let page_obj = doc
+            .get_object_mut(page_id)
+            .map_err(|e| format!("Could not get page object {:?}: {}", page_id, e))?;
+        let page_dict = page_obj
+            .as_dict_mut()
+            .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+        page_dict.set(
+            "Resources",
+            dictionary! {
+                "Font" => dictionary! {
+                    font_alias => font_id,
+                }
+            },
+        );
+        return Ok(());
+    }
+
+    let target_res_id = resources_ref;
+
+    let font_ref = {
+        let res_dict = if let Some(r_id) = target_res_id {
+            let res_obj = doc
+                .get_object(r_id)
+                .map_err(|e| format!("Could not get resources object {:?}: {}", r_id, e))?;
+            res_obj
+                .as_dict()
+                .map_err(|e| format!("Resources object {:?} is not a dictionary: {}", r_id, e))?
+        } else {
+            let page_obj = doc
+                .get_object(page_id)
+                .map_err(|e| format!("Could not get page object {:?}: {}", page_id, e))?;
+            let page_dict = page_obj
+                .as_dict()
+                .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+            page_dict
+                .get(b"Resources")
+                .and_then(|r| r.as_dict())
+                .map_err(|e| format!("Resources is not a dictionary: {}", e))?
+        };
+
+        if let Ok(font_obj) = res_dict.get(b"Font") {
+            match font_obj {
+                Object::Reference(f_id) => Some(Some(*f_id)),
+                Object::Dictionary(_) => Some(None),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    };
+
+    match font_ref {
+        Some(Some(f_id)) => {
+            let font_obj = doc
+                .get_object_mut(f_id)
+                .map_err(|e| format!("Could not get Font resources object {:?}: {}", f_id, e))?;
+            let font_dict = font_obj
+                .as_dict_mut()
+                .map_err(|e| format!("Font resources object {:?} is not a dictionary: {}", f_id, e))?;
+            font_dict.set(font_alias, font_id);
+        }
+        Some(None) => {
+            let res_dict = if let Some(r_id) = target_res_id {
+                let res_obj = doc
+                    .get_object_mut(r_id)
+                    .map_err(|e| format!("Could not get resources object {:?}: {}", r_id, e))?;
+                res_obj
+                    .as_dict_mut()
+                    .map_err(|e| format!("Resources object {:?} is not a dictionary: {}", r_id, e))?
+            } else {
+                let page_obj = doc
+                    .get_object_mut(page_id)
+                    .map_err(|e| format!("Could not get page object {:?}: {}", page_id, e))?;
+                let page_dict = page_obj
+                    .as_dict_mut()
+                    .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+                let res_obj = page_dict
+                    .get_mut(b"Resources")
+                    .map_err(|e| format!("Could not get resources: {}", e))?;
+                res_obj
+                    .as_dict_mut()
+                    .map_err(|e| format!("Resources is not a dictionary: {}", e))?
+            };
+            if let Ok(font_obj) = res_dict.get_mut(b"Font") {
+                if let Ok(font_dict) = font_obj.as_dict_mut() {
+                    font_dict.set(font_alias, font_id);
+                }
+            }
+        }
+        None => {
+            let res_dict = if let Some(r_id) = target_res_id {
+                let res_obj = doc
+                    .get_object_mut(r_id)
+                    .map_err(|e| format!("Could not get resources object {:?}: {}", r_id, e))?;
+                res_obj
+                    .as_dict_mut()
+                    .map_err(|e| format!("Resources object {:?} is not a dictionary: {}", r_id, e))?
+            } else {
+                let page_obj = doc
+                    .get_object_mut(page_id)
+                    .map_err(|e| format!("Could not get page object {:?}: {}", page_id, e))?;
+                let page_dict = page_obj
+                    .as_dict_mut()
+                    .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+                let res_obj = page_dict
+                    .get_mut(b"Resources")
+                    .map_err(|e| format!("Could not get resources: {}", e))?;
+                res_obj
+                    .as_dict_mut()
+                    .map_err(|e| format!("Resources is not a dictionary: {}", e))?
+            };
+            res_dict.set(
+                "Font",
+                dictionary! {
+                    font_alias => font_id,
+                },
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn append_stamp_stream_to_page(
+    doc: &mut Document,
+    page_id: ObjectId,
+    stamp_stream_id: ObjectId,
+) -> Result<(), String> {
+    let page_obj = doc
+        .get_object_mut(page_id)
+        .map_err(|e| format!("Could not get page object {:?}: {}", page_id, e))?;
+    let page_dict = page_obj
+        .as_dict_mut()
+        .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+
+    if let Ok(contents) = page_dict.get_mut(b"Contents") {
+        match contents {
+            Object::Array(ref mut arr) => {
+                arr.push(Object::Reference(stamp_stream_id));
+            }
+            Object::Reference(orig_ref) => {
+                let new_arr = vec![Object::Reference(*orig_ref), Object::Reference(stamp_stream_id)];
+                *contents = Object::Array(new_arr);
+            }
+            _ => {
+                *contents = Object::Reference(stamp_stream_id);
+            }
+        }
+    } else {
+        page_dict.set("Contents", Object::Reference(stamp_stream_id));
+    }
+
+    Ok(())
+}
+
+/// Stamp customizable page numbers onto each page of a PDF document.
+pub fn add_page_numbers_to_pdf(
+    input_path: &Path,
+    output_path: &Path,
+    options: &PageNumberOptions,
+) -> Result<PageNumberStats, String> {
+    // 1. Overwrite protection
+    if let (Ok(in_canon), Ok(out_canon)) = (input_path.canonicalize(), output_path.canonicalize()) {
+        if in_canon == out_canon {
+            return Err(
+                "Cannot overwrite the original PDF file. Please choose a different file name or location."
+                    .to_string(),
+            );
+        }
+    } else if input_path.to_string_lossy().to_lowercase().trim()
+        == output_path.to_string_lossy().to_lowercase().trim()
+    {
+        return Err(
+            "Cannot overwrite the original PDF file. Please choose a different file name or location."
+                .to_string(),
+        );
+    }
+
+    // 2. Load PDF safely (checking encryption)
+    let mut doc = load_pdf_safely(input_path)?;
+    let pages = doc.get_pages();
+    let total_pages = pages.len();
+    if total_pages == 0 {
+        return Err("The selected PDF document has no pages".to_string());
+    }
+
+    // 3. Add standard Helvetica Type1 font
+    let font_dict = dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+        "Encoding" => "WinAnsiEncoding",
+    };
+    let font_id = doc.add_object(font_dict);
+    let font_alias = "F_PN";
+
+    // 4. Validate and clamp options
+    let font_size = options.font_size.clamp(8.0, 24.0);
+    let margin = options.margin.max(10.0);
+    let start_number = options.start_number.max(1);
+
+    // 5. Process each page in ascending order
+    for (page_idx, (page_num, page_id)) in pages.into_iter().enumerate() {
+        let (mb_x0, mb_y0, mb_x1, mb_y1) = resolve_page_mediabox(&doc, page_id);
+        let page_left = mb_x0.min(mb_x1) as f32;
+        let page_bottom = mb_y0.min(mb_y1) as f32;
+        let page_width = (mb_x1 - mb_x0).abs() as f32;
+        let page_height = (mb_y1 - mb_y0).abs() as f32;
+
+        ensure_font_in_page_resources(&mut doc, page_id, font_alias, font_id)?;
+
+        let current_page_num = start_number + (page_idx as u32);
+        let text = format_page_number(&options.format, current_page_num, total_pages);
+        let text_width = helvetica_text_width(&text, font_size);
+
+        let x = match options.position {
+            PageNumberPosition::TopLeft | PageNumberPosition::BottomLeft => page_left + margin,
+            PageNumberPosition::TopCenter | PageNumberPosition::BottomCenter => {
+                page_left + ((page_width - text_width) / 2.0).max(margin)
+            }
+            PageNumberPosition::TopRight | PageNumberPosition::BottomRight => {
+                (page_left + page_width - margin - text_width).max(page_left + margin)
+            }
+        };
+
+        let y = match options.position {
+            PageNumberPosition::TopLeft
+            | PageNumberPosition::TopCenter
+            | PageNumberPosition::TopRight => page_bottom + page_height - margin - font_size,
+            PageNumberPosition::BottomLeft
+            | PageNumberPosition::BottomCenter
+            | PageNumberPosition::BottomRight => page_bottom + margin,
+        };
+
+        let stamp_content = Content {
+            operations: vec![
+                Operation::new("q", vec![]),
+                Operation::new("rg", vec![0.into(), 0.into(), 0.into()]),
+                Operation::new("RG", vec![0.into(), 0.into(), 0.into()]),
+                Operation::new("BT", vec![]),
+                Operation::new(
+                    "Tf",
+                    vec![
+                        Object::Name(font_alias.as_bytes().to_vec()),
+                        font_size.into(),
+                    ],
+                ),
+                Operation::new(
+                    "Tm",
+                    vec![
+                        1.into(),
+                        0.into(),
+                        0.into(),
+                        1.into(),
+                        x.into(),
+                        y.into(),
+                    ],
+                ),
+                Operation::new("Tj", vec![Object::string_literal(text)]),
+                Operation::new("ET", vec![]),
+                Operation::new("Q", vec![]),
+            ],
+        };
+
+        let encoded = stamp_content.encode().map_err(|e| {
+            format!(
+                "Failed to encode page number content on page {}: {}",
+                page_num, e
+            )
+        })?;
+
+        let mut stream = Stream::new(dictionary! {}, encoded);
+        let _ = stream.compress();
+        let stamp_id = doc.add_object(stream);
+
+        append_stamp_stream_to_page(&mut doc, page_id, stamp_id)?;
+    }
+
+    // 6. Save modified document
+    doc.save(output_path)
+        .map_err(|e| format!("Failed to save numbered PDF to '{:?}': {}", output_path, e))?;
+
+    Ok(PageNumberStats {
+        pages_processed: total_pages,
+        output_path: output_path.to_string_lossy().to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1489,6 +1982,111 @@ mod tests {
         assert_eq!(stats.extracted_files.len(), 1);
         assert!(stats.extracted_files[0].starts_with("img_doc_p1_img1"));
         assert!(out_dir.join(&stats.extracted_files[0]).exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_format_page_number_templates() {
+        assert_eq!(format_page_number("Page X of Y", 1, 5), "Page 1 of 5");
+        assert_eq!(format_page_number("X", 3, 10), "3");
+        assert_eq!(format_page_number("Page X", 2, 8), "Page 2");
+        assert_eq!(format_page_number("X / Y", 4, 12), "4 / 12");
+        assert_eq!(format_page_number("- X -", 1, 1), "- 1 -");
+        assert_eq!(format_page_number("{page} of {total}", 5, 20), "5 of 20");
+        assert_eq!(format_page_number("", 7, 10), "7");
+    }
+
+    #[test]
+    fn test_add_page_numbers_all_positions() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_page_numbers");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc_path = temp_dir.join("sample.pdf");
+        create_test_pdf(3, &doc_path);
+
+        let positions = [
+            PageNumberPosition::TopLeft,
+            PageNumberPosition::TopCenter,
+            PageNumberPosition::TopRight,
+            PageNumberPosition::BottomLeft,
+            PageNumberPosition::BottomCenter,
+            PageNumberPosition::BottomRight,
+        ];
+
+        for (idx, pos) in positions.iter().enumerate() {
+            let out_path = temp_dir.join(format!("sample_pos_{}.pdf", idx));
+            let options = PageNumberOptions {
+                position: *pos,
+                font_size: 12.0,
+                start_number: 1,
+                format: "Page X of Y".to_string(),
+                margin: 36.0,
+            };
+
+            let stats = add_page_numbers_to_pdf(&doc_path, &out_path, &options).unwrap();
+            assert_eq!(stats.pages_processed, 3);
+            assert!(out_path.exists());
+
+            // Verify the generated PDF can be loaded and read
+            let (page_count, size) = get_pdf_metadata(&out_path).unwrap();
+            assert_eq!(page_count, 3);
+            assert!(size > 0);
+        }
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_add_page_numbers_custom_start_and_format() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_pn_custom");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc_path = temp_dir.join("input.pdf");
+        let out_path = temp_dir.join("output.pdf");
+        create_test_pdf(2, &doc_path);
+
+        let options = PageNumberOptions {
+            position: PageNumberPosition::BottomRight,
+            font_size: 16.0,
+            start_number: 10,
+            format: "Doc Page X".to_string(),
+            margin: 40.0,
+        };
+
+        let stats = add_page_numbers_to_pdf(&doc_path, &out_path, &options).unwrap();
+        assert_eq!(stats.pages_processed, 2);
+
+        // Verify content extraction picks up the stamped text
+        let txt_path = temp_dir.join("extracted.txt");
+        let txt_stats = extract_text_content(&out_path, &txt_path).unwrap();
+        assert!(txt_stats.characters_extracted > 0);
+        let extracted_str = std::fs::read_to_string(&txt_path).unwrap();
+        assert!(extracted_str.contains("Doc Page 10"));
+        assert!(extracted_str.contains("Doc Page 11"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_add_page_numbers_overwrite_guard() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_pn_overwrite");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc_path = temp_dir.join("input.pdf");
+        create_test_pdf(1, &doc_path);
+
+        let options = PageNumberOptions {
+            position: PageNumberPosition::BottomCenter,
+            font_size: 10.0,
+            start_number: 1,
+            format: "X".to_string(),
+            margin: 30.0,
+        };
+
+        let result = add_page_numbers_to_pdf(&doc_path, &doc_path, &options);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Cannot overwrite the original PDF file"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

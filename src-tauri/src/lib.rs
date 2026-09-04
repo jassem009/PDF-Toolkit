@@ -23,6 +23,7 @@ pub fn run() {
             commands::extract_pdf_images,
             commands::save_txt_dialog,
             commands::pick_folder_dialog,
+            commands::add_page_numbers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
