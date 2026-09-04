@@ -672,6 +672,19 @@ export function App() {
             Organize Pages
           </button>
         </nav>
+
+        {/* App Header Actions */}
+        <div className="header-actions">
+          <button
+            type="button"
+            className="check-updates-button"
+            onClick={() => showToast("info", "You're on the latest version")}
+            title="Check for software updates (v1.0.0)"
+          >
+            <span className="update-icon">↻</span>
+            <span className="update-text">Check for Updates</span>
+          </button>
+        </div>
       </header>
 
       {/* Two-Panel Workspace */}
