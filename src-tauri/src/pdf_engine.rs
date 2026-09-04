@@ -2496,4 +2496,75 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
+
+    #[test]
+    fn test_organize_pdf_200_plus_pages() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_organize_200p");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let in_path = temp_dir.join("large_205p.pdf");
+        let out_path = temp_dir.join("large_organized.pdf");
+
+        // Generate 205 page PDF
+        create_test_pdf(205, &in_path);
+
+        // Fetch details for all 205 pages
+        let details = get_pdf_pages_details(&in_path).unwrap();
+        assert_eq!(details.len(), 205);
+
+        // Simulate operations:
+        // 1. Delete 3 pages (pages 50, 100, 150) -> leaves 202 pages
+        // 2. Rotate page 1 by 90°, page 2 by 180°, page 3 by 270°
+        // 3. Reorder: move page 205 to front
+        let mut actions: Vec<PageOrganizeAction> = details
+            .iter()
+            .filter(|d| d.page_number != 50 && d.page_number != 100 && d.page_number != 150)
+            .map(|d| {
+                let rot = match d.page_number {
+                    1 => 90,
+                    2 => 180,
+                    3 => 270,
+                    _ => 0,
+                };
+                PageOrganizeAction {
+                    original_page_number: d.page_number,
+                    rotation: rot,
+                }
+            })
+            .collect();
+
+        // Reorder: pop last (page 205) and insert at position 0
+        let last_action = actions.pop().unwrap();
+        assert_eq!(last_action.original_page_number, 205);
+        actions.insert(0, last_action);
+
+        assert_eq!(actions.len(), 202);
+
+        // Organize and save
+        let stats = organize_pdf_pages(&in_path, &out_path, &actions).unwrap();
+        assert_eq!(stats.pages_processed, 202);
+        assert!(out_path.exists());
+
+        // Validate resulting document
+        let out_details = get_pdf_pages_details(&out_path).unwrap();
+        assert_eq!(out_details.len(), 202);
+
+        // First page should be original page 205 with 0 rot
+        assert_eq!(out_details[0].page_number, 1);
+        assert_eq!(out_details[0].rotation, 0);
+
+        // Second page should be original page 1 with 90 rot
+        assert_eq!(out_details[1].page_number, 2);
+        assert_eq!(out_details[1].rotation, 90);
+
+        // Third page should be original page 2 with 180 rot
+        assert_eq!(out_details[2].page_number, 3);
+        assert_eq!(out_details[2].rotation, 180);
+
+        // Check text of first page is indeed from original page 205
+        let reloaded_doc = Document::load(&out_path).unwrap();
+        let p1_text = reloaded_doc.extract_text(&[1]).unwrap();
+        assert!(p1_text.contains("Page 205"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
 }
