@@ -1,5 +1,6 @@
 use lopdf::content::{Content, Operation};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -1588,6 +1589,171 @@ pub fn add_page_numbers_to_pdf(
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageOrganizeAction {
+    pub original_page_number: u32,
+    pub rotation: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDetails {
+    pub page_number: u32,
+    pub rotation: i64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizePagesStats {
+    pub pages_processed: usize,
+    pub output_path: String,
+}
+
+/// Retrieve per-page metadata (page number, current rotation, dimensions) for thumbnail visualization.
+pub fn get_pdf_pages_details(input_path: &Path) -> Result<Vec<PageDetails>, String> {
+    let doc = load_pdf_safely(input_path)?;
+    let pages = doc.get_pages();
+    let mut details = Vec::with_capacity(pages.len());
+
+    for (page_num, page_id) in pages {
+        let rot = resolve_page_rotation(&doc, page_id);
+        let (mb_x0, mb_y0, mb_x1, mb_y1) = resolve_page_mediabox(&doc, page_id);
+        let width = (mb_x1 - mb_x0).abs();
+        let height = (mb_y1 - mb_y0).abs();
+
+        details.push(PageDetails {
+            page_number: page_num,
+            rotation: rot,
+            width,
+            height,
+        });
+    }
+
+    // Bug 3A fix: guarantee ascending page order regardless of BTreeMap iteration
+    // order or unusual page-tree structures in the source PDF.
+    details.sort_by_key(|d| d.page_number);
+
+    Ok(details)
+}
+
+/// Reorder, rotate, and delete pages from a PDF document, saving to output_path.
+pub fn organize_pdf_pages(
+    input_path: &Path,
+    output_path: &Path,
+    pages_to_keep: &[PageOrganizeAction],
+) -> Result<OrganizePagesStats, String> {
+    // 1. Overwrite protection
+    if let (Ok(in_canon), Ok(out_canon)) = (input_path.canonicalize(), output_path.canonicalize()) {
+        if in_canon == out_canon {
+            return Err(
+                "Cannot overwrite the original PDF file. Please choose a different file name or location."
+                    .to_string(),
+            );
+        }
+    } else if input_path.to_string_lossy().to_lowercase().trim()
+        == output_path.to_string_lossy().to_lowercase().trim()
+    {
+        return Err(
+            "Cannot overwrite the original PDF file. Please choose a different file name or location."
+                .to_string(),
+        );
+    }
+
+    if pages_to_keep.is_empty() {
+        return Err("Cannot export an empty PDF. Please keep at least one page.".to_string());
+    }
+
+    // 2. Load PDF safely
+    let mut doc = load_pdf_safely(input_path)?;
+    let original_pages = doc.get_pages();
+    let original_count = original_pages.len();
+
+    if original_count == 0 {
+        return Err("The selected PDF document has no pages.".to_string());
+    }
+
+    // 3. Resolve target root pages object ID from Catalog
+    let catalog = doc
+        .catalog()
+        .map_err(|e| format!("Failed to read PDF catalog: {}", e))?;
+    let root_pages_id = catalog
+        .get(b"Pages")
+        .and_then(|obj| obj.as_reference())
+        .map_err(|e| format!("Failed to get root Pages reference: {}", e))?;
+
+    // 4. Validate each requested page exists and prepare kids array
+    let mut kids = Vec::with_capacity(pages_to_keep.len());
+
+    for action in pages_to_keep {
+        let page_id = original_pages
+            .get(&action.original_page_number)
+            .ok_or_else(|| {
+                format!(
+                    "Page {} not found in source document (total pages: {})",
+                    action.original_page_number, original_count
+                )
+            })?;
+
+        // Preserve inherited attributes (MediaBox, CropBox) before reparenting
+        let (mb_x0, mb_y0, mb_x1, mb_y1) = resolve_page_mediabox(&doc, *page_id);
+        let existing_rot = resolve_page_rotation(&doc, *page_id);
+        let final_rot = ((existing_rot + action.rotation) % 360 + 360) % 360;
+
+        let page_obj = doc
+            .get_object_mut(*page_id)
+            .map_err(|e| format!("Failed to retrieve page object {:?}: {}", page_id, e))?;
+        let page_dict = page_obj
+            .as_dict_mut()
+            .map_err(|e| format!("Page object {:?} is not a dictionary: {}", page_id, e))?;
+
+        // Ensure MediaBox is explicit
+        if !page_dict.has(b"MediaBox") {
+            page_dict.set(
+                "MediaBox",
+                vec![
+                    mb_x0.into(),
+                    mb_y0.into(),
+                    mb_x1.into(),
+                    mb_y1.into(),
+                ],
+            );
+        }
+
+        // Set updated rotation
+        page_dict.set("Rotate", Object::Integer(final_rot));
+
+        // Reparent to the root Pages dictionary
+        page_dict.set("Parent", Object::Reference(root_pages_id));
+
+        kids.push(Object::Reference(*page_id));
+    }
+
+    // 5. Update root Pages dictionary
+    let pages_count = kids.len() as u32;
+    let root_pages_obj = doc
+        .get_object_mut(root_pages_id)
+        .map_err(|e| format!("Failed to retrieve root Pages object {:?}: {}", root_pages_id, e))?;
+    let root_pages_dict = root_pages_obj
+        .as_dict_mut()
+        .map_err(|e| format!("Root Pages object {:?} is not a dictionary: {}", root_pages_id, e))?;
+
+    root_pages_dict.set("Kids", Object::Array(kids));
+    root_pages_dict.set("Count", Object::Integer(pages_count as i64));
+
+    // 6. Prune unreachable objects and renumber
+    doc.prune_objects();
+    doc.renumber_objects();
+
+    // 7. Save modified document
+    doc.save(output_path)
+        .map_err(|e| format!("Failed to save organized PDF to '{:?}': {}", output_path, e))?;
+
+    Ok(OrganizePagesStats {
+        pages_processed: pages_count as usize,
+        output_path: output_path.to_string_lossy().to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2254,6 +2420,154 @@ mod tests {
         let result = add_page_numbers_to_pdf(&doc_path, &doc_path, &options);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cannot overwrite the original PDF file"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_get_pdf_pages_details() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_page_details");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let doc_path = temp_dir.join("test_details.pdf");
+        create_test_pdf(3, &doc_path);
+
+        let details = get_pdf_pages_details(&doc_path).unwrap();
+        assert_eq!(details.len(), 3);
+        assert_eq!(details[0].page_number, 1);
+        assert_eq!(details[0].rotation, 0);
+        assert!((details[0].width - 612.0).abs() < 1.0);
+        assert!((details[0].height - 792.0).abs() < 1.0);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_organize_pdf_pages_reorder_rotate_delete() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_organize");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let in_path = temp_dir.join("in.pdf");
+        let out_path = temp_dir.join("out.pdf");
+        create_test_pdf(4, &in_path);
+
+        // Keep pages 4 and 2 (delete 1 and 3), reorder to [4, 2], and rotate page 4 by 90 deg
+        let actions = vec![
+            PageOrganizeAction {
+                original_page_number: 4,
+                rotation: 90,
+            },
+            PageOrganizeAction {
+                original_page_number: 2,
+                rotation: 0,
+            },
+        ];
+
+        let stats = organize_pdf_pages(&in_path, &out_path, &actions).unwrap();
+        assert_eq!(stats.pages_processed, 2);
+        assert!(out_path.exists());
+
+        // Verify reloaded metadata
+        let details = get_pdf_pages_details(&out_path).unwrap();
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].rotation, 90);
+        assert_eq!(details[1].rotation, 0);
+
+        // Verify text content per page
+        let reloaded_doc = Document::load(&out_path).unwrap();
+        let p1_text = reloaded_doc.extract_text(&[1]).unwrap();
+        let p2_text = reloaded_doc.extract_text(&[2]).unwrap();
+        assert!(p1_text.contains("Page 4"));
+        assert!(p2_text.contains("Page 2"));
+        assert!(!p1_text.contains("Page 1"));
+        assert!(!p2_text.contains("Page 3"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_organize_pdf_pages_overwrite_guard() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_organize_ow");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let doc_path = temp_dir.join("sample.pdf");
+        create_test_pdf(2, &doc_path);
+
+        let actions = vec![PageOrganizeAction {
+            original_page_number: 1,
+            rotation: 0,
+        }];
+        let res = organize_pdf_pages(&doc_path, &doc_path, &actions);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Cannot overwrite the original PDF file"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_organize_pdf_200_plus_pages() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_organize_200p");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let in_path = temp_dir.join("large_205p.pdf");
+        let out_path = temp_dir.join("large_organized.pdf");
+
+        // Generate 205 page PDF
+        create_test_pdf(205, &in_path);
+
+        // Fetch details for all 205 pages
+        let details = get_pdf_pages_details(&in_path).unwrap();
+        assert_eq!(details.len(), 205);
+
+        // Simulate operations:
+        // 1. Delete 3 pages (pages 50, 100, 150) -> leaves 202 pages
+        // 2. Rotate page 1 by 90°, page 2 by 180°, page 3 by 270°
+        // 3. Reorder: move page 205 to front
+        let mut actions: Vec<PageOrganizeAction> = details
+            .iter()
+            .filter(|d| d.page_number != 50 && d.page_number != 100 && d.page_number != 150)
+            .map(|d| {
+                let rot = match d.page_number {
+                    1 => 90,
+                    2 => 180,
+                    3 => 270,
+                    _ => 0,
+                };
+                PageOrganizeAction {
+                    original_page_number: d.page_number,
+                    rotation: rot,
+                }
+            })
+            .collect();
+
+        // Reorder: pop last (page 205) and insert at position 0
+        let last_action = actions.pop().unwrap();
+        assert_eq!(last_action.original_page_number, 205);
+        actions.insert(0, last_action);
+
+        assert_eq!(actions.len(), 202);
+
+        // Organize and save
+        let stats = organize_pdf_pages(&in_path, &out_path, &actions).unwrap();
+        assert_eq!(stats.pages_processed, 202);
+        assert!(out_path.exists());
+
+        // Validate resulting document
+        let out_details = get_pdf_pages_details(&out_path).unwrap();
+        assert_eq!(out_details.len(), 202);
+
+        // First page should be original page 205 with 0 rot
+        assert_eq!(out_details[0].page_number, 1);
+        assert_eq!(out_details[0].rotation, 0);
+
+        // Second page should be original page 1 with 90 rot
+        assert_eq!(out_details[1].page_number, 2);
+        assert_eq!(out_details[1].rotation, 90);
+
+        // Third page should be original page 2 with 180 rot
+        assert_eq!(out_details[2].page_number, 3);
+        assert_eq!(out_details[2].rotation, 180);
+
+        // Check text of first page is indeed from original page 205
+        let reloaded_doc = Document::load(&out_path).unwrap();
+        let p1_text = reloaded_doc.extract_text(&[1]).unwrap();
+        assert!(p1_text.contains("Page 205"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

@@ -24,6 +24,8 @@ pub fn run() {
             commands::save_txt_dialog,
             commands::pick_folder_dialog,
             commands::add_page_numbers,
+            commands::get_pdf_pages_details,
+            commands::organize_pdf_pages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
