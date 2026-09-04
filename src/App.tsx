@@ -34,6 +34,8 @@ export function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("merge");
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isDialogOpen, setIsDialogOpen] = useState<boolean>(false);
+  const isBusy = isProcessing || isDialogOpen;
   const [toast, setToast] = useState<ToastNotification | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
   const [compressError, setCompressError] = useState<string | null>(null);
@@ -86,8 +88,11 @@ export function App() {
 
   // Handle native file picker dialog
   const handlePickFiles = async () => {
+    if (isBusy) return;
     try {
+      setIsDialogOpen(true);
       const result = await invoke<LoadFilesResult>("pick_pdf_files");
+      setIsDialogOpen(false);
       if (result.files && result.files.length > 0) {
         addFiles(result.files);
         if (result.errors && result.errors.length > 0) {
@@ -100,6 +105,8 @@ export function App() {
       }
     } catch (err) {
       showToast("error", `Failed to pick files: ${String(err)}`);
+    } finally {
+      setIsDialogOpen(false);
     }
   };
 
@@ -212,15 +219,18 @@ export function App() {
 
   // Merge Action
   const handleMerge = async () => {
+    if (isBusy) return;
     if (files.length < 2) {
       showToast("error", "Please add at least 2 PDF files to perform a merge");
       return;
     }
 
     try {
+      setIsDialogOpen(true);
       const savePath = await invoke<string | null>("save_pdf_dialog", {
         defaultName: "merged.pdf",
       });
+      setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
@@ -233,14 +243,21 @@ export function App() {
 
       showToast("success", result);
     } catch (err) {
-      showToast("error", `Merge failed: ${String(err)}`);
+      const errStr = String(err);
+      if (errStr.includes("Output would overwrite a source file")) {
+        showToast("error", "Output would overwrite a source file — choose a different name");
+      } else {
+        showToast("error", `Merge failed: ${errStr}`);
+      }
     } finally {
+      setIsDialogOpen(false);
       setIsProcessing(false);
     }
   };
 
   // Split Action
   const handleSplit = async (pageRange: string) => {
+    if (isBusy) return;
     const targetFile = files[selectedFileIndex];
     if (!targetFile) {
       showToast("error", "Please select a PDF document to split");
@@ -251,9 +268,11 @@ export function App() {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
       const defaultName = `${baseName}_split.pdf`;
 
+      setIsDialogOpen(true);
       const savePath = await invoke<string | null>("save_pdf_dialog", {
         defaultName,
       });
+      setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
@@ -266,14 +285,21 @@ export function App() {
 
       showToast("success", result);
     } catch (err) {
-      showToast("error", `Split failed: ${String(err)}`);
+      const errStr = String(err);
+      if (errStr.includes("Output would overwrite a source file")) {
+        showToast("error", "Output would overwrite a source file — choose a different name");
+      } else {
+        showToast("error", `Split failed: ${errStr}`);
+      }
     } finally {
+      setIsDialogOpen(false);
       setIsProcessing(false);
     }
   };
 
   // Compress Action
   const handleCompress = async (quality: CompressionQuality) => {
+    if (isBusy) return;
     const targetFile = files[selectedFileIndex];
     if (!targetFile) {
       showToast("error", "Please select a PDF document to compress");
@@ -284,9 +310,11 @@ export function App() {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
       const defaultName = `${baseName}_compressed.pdf`;
 
+      setIsDialogOpen(true);
       const savePath = await invoke<string | null>("save_pdf_dialog", {
         defaultName,
       });
+      setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
@@ -325,12 +353,14 @@ export function App() {
         showToast("error", `Compression failed: ${errStr}`);
       }
     } finally {
+      setIsDialogOpen(false);
       setIsProcessing(false);
     }
   };
 
   // Extract Text Action
   const handleExtractText = async () => {
+    if (isBusy) return;
     const targetFile = files[selectedFileIndex];
     if (!targetFile) {
       showToast("error", "Please select a PDF document to extract text");
@@ -341,9 +371,11 @@ export function App() {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
       const defaultName = `${baseName}_text.txt`;
 
+      setIsDialogOpen(true);
       const savePath = await invoke<string | null>("save_txt_dialog", {
         defaultName,
       });
+      setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
@@ -371,12 +403,14 @@ export function App() {
       setExtractTextError(errStr);
       showToast("error", `Text extraction failed: ${errStr}`);
     } finally {
+      setIsDialogOpen(false);
       setIsProcessing(false);
     }
   };
 
   // Extract Images Action
   const handleExtractImages = async () => {
+    if (isBusy) return;
     const targetFile = files[selectedFileIndex];
     if (!targetFile) {
       showToast("error", "Please select a PDF document to extract images");
@@ -384,7 +418,9 @@ export function App() {
     }
 
     try {
+      setIsDialogOpen(true);
       const folderPath = await invoke<string | null>("pick_folder_dialog");
+      setIsDialogOpen(false);
 
       if (!folderPath) return; // User canceled dialog
 
@@ -412,12 +448,14 @@ export function App() {
       setExtractImagesError(errStr);
       showToast("error", `Image extraction failed: ${errStr}`);
     } finally {
+      setIsDialogOpen(false);
       setIsProcessing(false);
     }
   };
 
   // Add Page Numbers Action
   const handlePageNumbers = async (options: PageNumberOptions) => {
+    if (isBusy) return;
     const targetFile = files[selectedFileIndex];
     if (!targetFile) {
       showToast("error", "Please select a PDF document to add page numbers");
@@ -428,9 +466,11 @@ export function App() {
       const baseName = targetFile.name.replace(/\.pdf$/i, "");
       const defaultName = `${baseName}_numbered.pdf`;
 
+      setIsDialogOpen(true);
       const savePath = await invoke<string | null>("save_pdf_dialog", {
         defaultName,
       });
+      setIsDialogOpen(false);
 
       if (!savePath) return; // User canceled dialog
 
@@ -470,6 +510,7 @@ export function App() {
       setPageNumberError(errStr);
       showToast("error", `Adding page numbers failed: ${errStr}`);
     } finally {
+      setIsDialogOpen(false);
       setIsProcessing(false);
     }
   };
@@ -504,42 +545,49 @@ export function App() {
           <button
             className={`tab-button ${activeTab === "merge" ? "active" : ""}`}
             onClick={() => setActiveTab("merge")}
+            disabled={isBusy}
           >
             Merge PDFs
           </button>
           <button
             className={`tab-button ${activeTab === "split" ? "active" : ""}`}
             onClick={() => setActiveTab("split")}
+            disabled={isBusy}
           >
             Split PDF
           </button>
           <button
             className={`tab-button ${activeTab === "compress" ? "active" : ""}`}
             onClick={() => setActiveTab("compress")}
+            disabled={isBusy}
           >
             Compress PDF
           </button>
           <button
             className={`tab-button ${activeTab === "extract-text" ? "active" : ""}`}
             onClick={() => setActiveTab("extract-text")}
+            disabled={isBusy}
           >
             Extract Text
           </button>
           <button
             className={`tab-button ${activeTab === "extract-images" ? "active" : ""}`}
             onClick={() => setActiveTab("extract-images")}
+            disabled={isBusy}
           >
             Extract Images
           </button>
           <button
             className={`tab-button ${activeTab === "page-numbers" ? "active" : ""}`}
             onClick={() => setActiveTab("page-numbers")}
+            disabled={isBusy}
           >
             Add Page Numbers
           </button>
           <button
             className={`tab-button ${activeTab === "organize-pages" ? "active" : ""}`}
             onClick={() => setActiveTab("organize-pages")}
+            disabled={isBusy}
           >
             Organize Pages
           </button>
@@ -553,23 +601,33 @@ export function App() {
           files={files}
           selectedFileIndex={selectedFileIndex}
           onSelectFile={(idx) => {
+            if (isBusy) return;
             setSelectedFileIndex(idx);
             clearAllResults();
           }}
           onAddFiles={handlePickFiles}
           onRemoveFile={(idx) => {
+            if (isBusy) return;
             handleRemoveFile(idx);
             clearAllResults();
           }}
-          onMoveUp={handleMoveUp}
-          onMoveDown={handleMoveDown}
+          onMoveUp={(idx) => {
+            if (isBusy) return;
+            handleMoveUp(idx);
+          }}
+          onMoveDown={(idx) => {
+            if (isBusy) return;
+            handleMoveDown(idx);
+          }}
           onClearAll={() => {
+            if (isBusy) return;
             handleClearAll();
             clearAllResults();
           }}
           isDragging={isDragging}
           setIsDragging={setIsDragging}
           onFilesDropped={handlePathsDropped}
+          disabled={isBusy}
         />
 
         {/* Right Panel: Active Action Card */}
@@ -577,7 +635,7 @@ export function App() {
           {activeTab === "merge" && (
             <MergePanel
               files={files}
-              isProcessing={isProcessing}
+              isProcessing={isBusy}
               onMerge={handleMerge}
               statusMessage={toast?.type === "success" ? toast.message : null}
               errorMessage={toast?.type === "error" ? toast.message : null}
@@ -588,10 +646,11 @@ export function App() {
               files={files}
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
+                if (isBusy) return;
                 setSelectedFileIndex(idx);
                 clearAllResults();
               }}
-              isProcessing={isProcessing}
+              isProcessing={isBusy}
               onSplit={handleSplit}
               statusMessage={toast?.type === "success" ? toast.message : null}
               errorMessage={toast?.type === "error" ? toast.message : null}
@@ -602,10 +661,11 @@ export function App() {
               files={files}
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
+                if (isBusy) return;
                 setSelectedFileIndex(idx);
                 clearAllResults();
               }}
-              isProcessing={isProcessing}
+              isProcessing={isBusy}
               onCompress={handleCompress}
               compressResult={compressResult}
               onResetResult={() => setCompressResult(null)}
@@ -619,10 +679,11 @@ export function App() {
               files={files}
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
+                if (isBusy) return;
                 setSelectedFileIndex(idx);
                 clearAllResults();
               }}
-              isProcessing={isProcessing}
+              isProcessing={isBusy}
               onExtractText={handleExtractText}
               extractResult={extractTextResult}
               onResetResult={() => setExtractTextResult(null)}
@@ -636,10 +697,11 @@ export function App() {
               files={files}
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
+                if (isBusy) return;
                 setSelectedFileIndex(idx);
                 clearAllResults();
               }}
-              isProcessing={isProcessing}
+              isProcessing={isBusy}
               onExtractImages={handleExtractImages}
               extractResult={extractImagesResult}
               onResetResult={() => setExtractImagesResult(null)}
@@ -653,10 +715,11 @@ export function App() {
               files={files}
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
+                if (isBusy) return;
                 setSelectedFileIndex(idx);
                 clearAllResults();
               }}
-              isProcessing={isProcessing}
+              isProcessing={isBusy}
               onAddPageNumbers={handlePageNumbers}
               onCancel={() => {
                 clearAllResults();
@@ -666,7 +729,7 @@ export function App() {
               errorMessage={pageNumberError}
               pageNumberResult={pageNumberResult}
               onResetResult={() => setPageNumberResult(null)}
-              onOpenDialog={() => setIsPageNumbersDialogOpen(true)}
+              onOpenDialog={() => !isBusy && setIsPageNumbersDialogOpen(true)}
             />
           )}
           {activeTab === "organize-pages" && (
@@ -674,6 +737,7 @@ export function App() {
               files={files}
               selectedIndex={selectedFileIndex}
               onSelectFile={(idx) => {
+                if (isBusy) return;
                 setSelectedFileIndex(idx);
                 clearAllResults();
               }}
@@ -691,10 +755,11 @@ export function App() {
         files={files}
         selectedIndex={selectedFileIndex}
         onSelectFile={(idx) => {
+          if (isBusy) return;
           setSelectedFileIndex(idx);
           clearAllResults();
         }}
-        isProcessing={isProcessing}
+        isProcessing={isBusy}
         onAddPageNumbers={async (opts) => {
           await handlePageNumbers(opts);
           setIsPageNumbersDialogOpen(false);

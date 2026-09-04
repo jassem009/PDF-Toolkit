@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   PdfFileInfo,
@@ -42,58 +42,80 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
   // Deletion confirm dialog state
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
   const [pagesToDelete, setPagesToDelete] = useState<number[]>([]); // indexes to delete
+  const [reloadKey, setReloadKey] = useState<number>(0);
+  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState<boolean>(false);
 
-  // Load pages when selected file changes
-  const loadPageDetails = useCallback(async () => {
+  // Request token ref for cancelling stale in-flight page detail loads
+  const requestTokenRef = React.useRef<number>(0);
+
+  // Load pages when selected file changes, discarding in-flight loads from previous document
+  useEffect(() => {
+    let isCancelled = false;
+    const currentToken = ++requestTokenRef.current;
+
     if (!selectedFile) {
       setPages([]);
       setSelectedIds(new Set());
+      setIsLoadingPages(false);
       return;
     }
 
     setIsLoadingPages(true);
     setExportResult(null);
 
-    try {
-      const details = await invoke<PageDetails[]>("get_pdf_pages_details", {
-        inputPath: selectedFile.path,
-      });
+    const fetchPages = async () => {
+      try {
+        const details = await invoke<PageDetails[]>("get_pdf_pages_details", {
+          inputPath: selectedFile.path,
+        });
 
-      const initialPages: PageItemState[] = details.map((d, idx) => ({
-        id: `page-${selectedFile.name}-${d.page_number}-${idx}-${Date.now()}`,
-        originalPageNumber: d.page_number,
-        additionalRotation: 0,
-        nativeRotation: d.rotation,
-        width: d.width,
-        height: d.height,
-      }));
+        if (isCancelled || requestTokenRef.current !== currentToken) {
+          return;
+        }
 
-      setPages(initialPages);
-      setSelectedIds(new Set());
-      setLastSelectedIndex(null);
-    } catch (err) {
-      onErrorToast(typeof err === "string" ? err : "Failed to load document pages");
-      // Fallback: create stub pages from page_count
-      const fallbackPages: PageItemState[] = Array.from(
-        { length: selectedFile.page_count },
-        (_, i) => ({
-          id: `page-fallback-${i + 1}`,
-          originalPageNumber: i + 1,
+        const initialPages: PageItemState[] = details.map((d, idx) => ({
+          id: `page-${selectedFile.name}-${d.page_number}-${idx}-${Date.now()}`,
+          originalPageNumber: d.page_number,
           additionalRotation: 0,
-          nativeRotation: 0,
-          width: 612,
-          height: 792,
-        })
-      );
-      setPages(fallbackPages);
-    } finally {
-      setIsLoadingPages(false);
-    }
-  }, [selectedFile, onErrorToast]);
+          nativeRotation: d.rotation,
+          width: d.width,
+          height: d.height,
+        }));
 
-  useEffect(() => {
-    loadPageDetails();
-  }, [loadPageDetails]);
+        setPages(initialPages);
+        setSelectedIds(new Set());
+        setLastSelectedIndex(null);
+      } catch (err) {
+        if (isCancelled || requestTokenRef.current !== currentToken) {
+          return;
+        }
+        onErrorToast(typeof err === "string" ? err : "Failed to load document pages");
+        // Fallback: create stub pages from page_count
+        const fallbackPages: PageItemState[] = Array.from(
+          { length: selectedFile.page_count },
+          (_, i) => ({
+            id: `page-fallback-${i + 1}`,
+            originalPageNumber: i + 1,
+            additionalRotation: 0,
+            nativeRotation: 0,
+            width: 612,
+            height: 792,
+          })
+        );
+        setPages(fallbackPages);
+      } finally {
+        if (!isCancelled && requestTokenRef.current === currentToken) {
+          setIsLoadingPages(false);
+        }
+      }
+    };
+
+    fetchPages();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedFile?.path, selectedFile?.name, selectedFile?.page_count, reloadKey, onErrorToast]);
 
   // Rotate single page — delta defaults to +90° (clockwise)
   const handleRotatePage = (index: number, delta: number = 90) => {
@@ -254,13 +276,13 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
 
   // Reset to original
   const handleReset = () => {
-    loadPageDetails();
+    setReloadKey((k) => k + 1);
     onSuccessToast("Reset all page order and rotations to original state");
   };
 
   // Export modified PDF
   const handleExport = async () => {
-    if (!selectedFile || pages.length === 0) return;
+    if (!selectedFile || pages.length === 0 || isExporting || isSaveDialogOpen) return;
 
     // Bug 7B: Clear any previous export result immediately so a stale banner
     // never shows while a new export is in progress.
@@ -270,12 +292,15 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
     const defaultName = selectedFile.name.replace(/\.pdf$/i, "_organized.pdf");
     let outputPath: string | null = null;
     try {
+      setIsSaveDialogOpen(true);
       outputPath = await invoke<string | null>("save_pdf_dialog", {
         defaultName,
       });
     } catch (err) {
       onErrorToast("Save dialog error: " + err);
       return;
+    } finally {
+      setIsSaveDialogOpen(false);
     }
 
     if (!outputPath) {
@@ -513,7 +538,7 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
               type="button"
               className="action-button primary-button export-btn"
               onClick={handleExport}
-              disabled={isExporting || pages.length === 0}
+              disabled={isExporting || isSaveDialogOpen || pages.length === 0 || isLoadingPages}
             >
               {isExporting ? (
                 <>

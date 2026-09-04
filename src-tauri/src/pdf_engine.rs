@@ -232,6 +232,20 @@ pub fn merge_documents(input_paths: &[PathBuf], output_path: &Path) -> Result<()
         return Err("Please add at least 2 PDF files to perform a merge".to_string());
     }
 
+    // Overwrite guard: output must not resolve to any of the source files.
+    let out_canon = output_path.canonicalize().ok();
+    for input_path in input_paths {
+        let collision = match (&out_canon, input_path.canonicalize().ok()) {
+            (Some(o), Some(i)) => o == &i,
+            _ => output_path == input_path,
+        };
+        if collision {
+            return Err(
+                "Output would overwrite a source file — choose a different name".to_string(),
+            );
+        }
+    }
+
     let mut loaded_docs = Vec::new();
     for path in input_paths {
         let doc = load_pdf_safely(path)?;
@@ -339,6 +353,17 @@ pub fn split_document(
 ) -> Result<(), String> {
     if pages_to_keep.is_empty() {
         return Err("No pages specified to extract".to_string());
+    }
+
+    // Overwrite guard: output must not resolve to the source file.
+    let overwrite = match (input_path.canonicalize().ok(), output_path.canonicalize().ok()) {
+        (Some(i), Some(o)) => i == o,
+        _ => input_path == output_path,
+    };
+    if overwrite {
+        return Err(
+            "Output would overwrite a source file — choose a different name".to_string(),
+        );
     }
 
     let mut doc = load_pdf_safely(input_path)?;
@@ -2568,6 +2593,139 @@ mod tests {
         let reloaded_doc = Document::load(&out_path).unwrap();
         let p1_text = reloaded_doc.extract_text(&[1]).unwrap();
         assert!(p1_text.contains("Page 205"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    // ------------------------------------------------------------------
+    // Overwrite-guard tests for merge_documents and split_document
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_merge_overwrite_guard_same_path() {
+        // Output identical to one of the source files must be rejected.
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_merge_guard_same");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc1 = temp_dir.join("doc1.pdf");
+        let doc2 = temp_dir.join("doc2.pdf");
+        create_test_pdf(1, &doc1);
+        create_test_pdf(1, &doc2);
+
+        // Output == doc1 (a source file)
+        let result = merge_documents(&[doc1.clone(), doc2.clone()], &doc1);
+        assert!(result.is_err(), "Expected error when output == source file");
+        assert!(
+            result.unwrap_err().contains("Output would overwrite a source file"),
+            "Error message mismatch"
+        );
+
+        // Original files must be intact
+        assert!(doc1.exists());
+        assert!(doc2.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_merge_overwrite_guard_different_path() {
+        // A genuinely different output path must succeed.
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_merge_guard_diff");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc1 = temp_dir.join("doc1.pdf");
+        let doc2 = temp_dir.join("doc2.pdf");
+        let out  = temp_dir.join("merged_output.pdf");
+        create_test_pdf(1, &doc1);
+        create_test_pdf(1, &doc2);
+
+        let result = merge_documents(&[doc1.clone(), doc2.clone()], &out);
+        assert!(result.is_ok(), "Merge with distinct output path should succeed: {:?}", result.err());
+        assert!(out.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_merge_overwrite_guard_same_name_different_dir() {
+        // Same filename in a different directory must succeed (no false positive).
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_merge_guard_diffdir");
+        let src_dir  = temp_dir.join("src");
+        let out_dir  = temp_dir.join("out");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let doc1 = src_dir.join("file.pdf");
+        let doc2 = src_dir.join("file2.pdf");
+        // Output has the same filename as doc1 but lives in a different directory.
+        let out  = out_dir.join("file.pdf");
+        create_test_pdf(1, &doc1);
+        create_test_pdf(1, &doc2);
+
+        let result = merge_documents(&[doc1.clone(), doc2.clone()], &out);
+        assert!(result.is_ok(), "Same filename in different dir should be allowed: {:?}", result.err());
+        assert!(out.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_split_overwrite_guard_same_path() {
+        // Output identical to source must be rejected.
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_split_guard_same");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc = temp_dir.join("source.pdf");
+        create_test_pdf(3, &doc);
+
+        let result = split_document(&doc, &[1, 2], &doc);
+        assert!(result.is_err(), "Expected error when output == source file");
+        assert!(
+            result.unwrap_err().contains("Output would overwrite a source file"),
+            "Error message mismatch"
+        );
+
+        // Original file must be intact (3 pages)
+        let (pages, _) = get_pdf_metadata(&doc).unwrap();
+        assert_eq!(pages, 3, "Source file must not have been modified");
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_split_overwrite_guard_different_path() {
+        // A genuinely different output path must succeed.
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_split_guard_diff");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc = temp_dir.join("source.pdf");
+        let out = temp_dir.join("split_output.pdf");
+        create_test_pdf(3, &doc);
+
+        let result = split_document(&doc, &[1, 2], &out);
+        assert!(result.is_ok(), "Split with distinct output path should succeed: {:?}", result.err());
+        assert!(out.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_split_overwrite_guard_same_name_different_dir() {
+        // Same filename in a different directory must succeed (no false positive).
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_split_guard_diffdir");
+        let src_dir  = temp_dir.join("src");
+        let out_dir  = temp_dir.join("out");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let doc = src_dir.join("report.pdf");
+        // Same filename but different directory.
+        let out = out_dir.join("report.pdf");
+        create_test_pdf(2, &doc);
+
+        let result = split_document(&doc, &[1], &out);
+        assert!(result.is_ok(), "Same filename in different dir should be allowed: {:?}", result.err());
+        assert!(out.exists());
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
