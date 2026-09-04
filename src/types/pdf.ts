@@ -39,7 +39,8 @@ export type ActiveTab =
   | "compress"
   | "extract-text"
   | "extract-images"
-  | "page-numbers";
+  | "page-numbers"
+  | "organize-pages";
 
 export type CompressionQuality = "low" | "medium" | "high";
 
@@ -60,6 +61,32 @@ export interface PageNumberOptions {
 }
 
 export interface PageNumberResult {
+  pages_processed: number;
+  output_path: string;
+}
+
+export interface PageDetails {
+  page_number: number;
+  rotation: number;
+  width: number;
+  height: number;
+}
+
+export interface PageItemState {
+  id: string; // unique stable identifier
+  originalPageNumber: number; // 1-indexed
+  additionalRotation: number; // 0, 90, 180, 270 added to existing
+  nativeRotation: number; // original rotation in degrees
+  width: number;
+  height: number;
+}
+
+export interface PageOrganizeAction {
+  original_page_number: number;
+  rotation: number;
+}
+
+export interface OrganizePagesResult {
   pages_processed: number;
   output_path: string;
 }

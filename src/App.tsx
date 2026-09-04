@@ -20,6 +20,7 @@ import { ExtractTextPanel } from "./components/ExtractTextPanel";
 import { ExtractImagesPanel } from "./components/ExtractImagesPanel";
 import { PageNumbersPanel } from "./components/PageNumbersPanel";
 import { PageNumbersDialog } from "./components/PageNumbersDialog";
+import { OrganizePagesPanel } from "./components/OrganizePagesPanel";
 import "./App.css";
 
 interface ToastNotification {
@@ -536,6 +537,12 @@ export function App() {
           >
             Add Page Numbers
           </button>
+          <button
+            className={`tab-button ${activeTab === "organize-pages" ? "active" : ""}`}
+            onClick={() => setActiveTab("organize-pages")}
+          >
+            Organize Pages
+          </button>
         </nav>
       </header>
 
@@ -660,6 +667,18 @@ export function App() {
               pageNumberResult={pageNumberResult}
               onResetResult={() => setPageNumberResult(null)}
               onOpenDialog={() => setIsPageNumbersDialogOpen(true)}
+            />
+          )}
+          {activeTab === "organize-pages" && (
+            <OrganizePagesPanel
+              files={files}
+              selectedIndex={selectedFileIndex}
+              onSelectFile={(idx) => {
+                setSelectedFileIndex(idx);
+                clearAllResults();
+              }}
+              onSuccessToast={(msg) => showToast("success", msg)}
+              onErrorToast={(msg) => showToast("error", msg)}
             />
           )}
         </main>
