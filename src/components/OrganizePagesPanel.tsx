@@ -95,14 +95,14 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
     loadPageDetails();
   }, [loadPageDetails]);
 
-  // Rotate single page
-  const handleRotatePage = (index: number) => {
+  // Rotate single page — delta defaults to +90° (clockwise)
+  const handleRotatePage = (index: number, delta: number = 90) => {
     setPages((prev) =>
       prev.map((p, idx) =>
         idx === index
           ? {
               ...p,
-              additionalRotation: (p.additionalRotation + 90) % 360,
+              additionalRotation: ((p.additionalRotation + delta) % 360 + 360) % 360,
             }
           : p
       )
@@ -262,6 +262,10 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
   const handleExport = async () => {
     if (!selectedFile || pages.length === 0) return;
 
+    // Bug 7B: Clear any previous export result immediately so a stale banner
+    // never shows while a new export is in progress.
+    setExportResult(null);
+
     // Pick save destination
     const defaultName = selectedFile.name.replace(/\.pdf$/i, "_organized.pdf");
     let outputPath: string | null = null;
@@ -299,7 +303,13 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
       });
 
       setExportResult(res);
-      onSuccessToast(`Successfully saved ${res.pages_processed} pages to: ${outputPath}`);
+
+      // Bug 2A: When no modifications were made, include a note so the user
+      // understands they exported an identical copy (no silent surprise).
+      const successMsg = isModified
+        ? `Successfully saved ${res.pages_processed} pages to: ${outputPath}`
+        : `Exported unmodified copy — no layout changes were made. ${res.pages_processed} pages saved to: ${outputPath}`;
+      onSuccessToast(successMsg);
     } catch (err) {
       onErrorToast(typeof err === "string" ? err : "Failed to organize and export PDF");
     } finally {
@@ -322,12 +332,20 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
     (selectedFile && pages.length !== selectedFile.page_count);
 
   // Label for confirmation dialog
+  // Bug 4A: When pages have been reordered, show both the current display position
+  // and the original page number so the user knows exactly which page is affected.
   const deleteLabels = useMemo(() => {
     return pagesToDelete
-      .map((idx) => `#${idx + 1}`)
+      .map((idx) => {
+        const page = pages[idx];
+        if (!page) return `#${idx + 1}`;
+        return page.originalPageNumber !== idx + 1
+          ? `#${idx + 1} (orig p.${page.originalPageNumber})`
+          : `#${idx + 1}`;
+      })
       .slice(0, 10)
       .join(", ") + (pagesToDelete.length > 10 ? ", ..." : "");
-  }, [pagesToDelete]);
+  }, [pagesToDelete, pages]);
 
   return (
     <div className="action-card organize-pages-card">
@@ -414,6 +432,17 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
           <div className="toolbar-divider" />
 
           <div className="toolbar-group rotate-group">
+            {/* Bug 1A fix: provide both CW and CCW rotation for selected/all pages */}
+            <button
+              type="button"
+              className="toolbar-button secondary-button"
+              onClick={() => handleRotateSelected(-90)}
+              disabled={selectedIds.size === 0}
+              title="Rotate selected pages 90° counter-clockwise"
+            >
+              <span className="tb-icon">⟲</span>
+              <span>Rotate Selected (−90°)</span>
+            </button>
             <button
               type="button"
               className="toolbar-button secondary-button"
@@ -423,6 +452,16 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
             >
               <span className="tb-icon">⟳</span>
               <span>Rotate Selected (+90°)</span>
+            </button>
+            <button
+              type="button"
+              className="toolbar-button secondary-button"
+              onClick={() => handleRotateAll(-90)}
+              disabled={pages.length === 0}
+              title="Rotate all pages 90° counter-clockwise"
+            >
+              <span className="tb-icon">↺</span>
+              <span>Rotate All (−90°)</span>
             </button>
             <button
               type="button"
@@ -444,7 +483,13 @@ export const OrganizePagesPanel: React.FC<OrganizePagesPanelProps> = ({
               className="toolbar-button danger-button"
               onClick={handleRequestDeleteSelected}
               disabled={selectedIds.size === 0 || selectedIds.size >= pages.length}
-              title="Delete selected pages (with confirmation)"
+              title={
+                selectedIds.size === 0
+                  ? "Select pages first to enable deletion"
+                  : selectedIds.size >= pages.length
+                  ? "Cannot delete all pages — at least one page must remain"
+                  : "Delete selected pages (with confirmation)"
+              }
             >
               <span className="tb-icon">✕</span>
               <span>Delete Pages ({selectedIds.size})</span>

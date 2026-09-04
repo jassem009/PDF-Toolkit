@@ -1629,6 +1629,10 @@ pub fn get_pdf_pages_details(input_path: &Path) -> Result<Vec<PageDetails>, Stri
         });
     }
 
+    // Bug 3A fix: guarantee ascending page order regardless of BTreeMap iteration
+    // order or unusual page-tree structures in the source PDF.
+    details.sort_by_key(|d| d.page_number);
+
     Ok(details)
 }
 

@@ -6,7 +6,7 @@ interface LazyPageThumbnailProps {
   index: number;
   isSelected: boolean;
   onToggleSelect: (index: number, e: React.MouseEvent) => void;
-  onRotatePage: (index: number) => void;
+  onRotatePage: (index: number, delta?: number) => void;
   onDeletePage: (index: number) => void;
   onDragStart: (e: React.DragEvent, index: number) => void;
   onDragOver: (e: React.DragEvent, index: number) => void;
@@ -37,16 +37,18 @@ export const LazyPageThumbnail: React.FC<LazyPageThumbnailProps> = ({
     const el = cellRef.current;
     if (!el) return;
 
-    // IntersectionObserver with 250px prefetch buffer
+    // Bug 6A fix: bidirectional observer — unload content when the cell scrolls
+    // beyond the 400 px prefetch band so off-screen thumbnails never accumulate
+    // in the DOM. With a 400 px margin, content mounts well before the user sees
+    // the cell and unmounts only after it has scrolled far enough away to avoid
+    // visible flicker on normal scroll speeds.
     const observer = new IntersectionObserver(
       (entries) => {
         const [entry] = entries;
-        if (entry.isIntersecting) {
-          setIsVisible(true);
-        }
+        setIsVisible(entry.isIntersecting);
       },
       {
-        rootMargin: "250px 0px",
+        rootMargin: "400px 0px",
         threshold: 0.01,
       }
     );
@@ -72,7 +74,8 @@ export const LazyPageThumbnail: React.FC<LazyPageThumbnailProps> = ({
     ) {
       return;
     }
-    onRotatePage(index);
+    // Card body click always rotates clockwise (+90°)
+    onRotatePage(index, 90);
   };
 
   return (
@@ -158,10 +161,21 @@ export const LazyPageThumbnail: React.FC<LazyPageThumbnailProps> = ({
 
           {/* Hover Action Bar */}
           <div className="thumbnail-bottom-bar" onClick={(e) => e.stopPropagation()}>
+            {/* Bug 1A fix: expose both CW and CCW rotation per-thumbnail */}
             <button
               type="button"
               className="thumbnail-btn rotate-btn"
-              onClick={() => onRotatePage(index)}
+              onClick={() => onRotatePage(index, -90)}
+              title="Rotate 90° counter-clockwise"
+            >
+              <span className="btn-icon">⟲</span>
+              <span className="btn-text">-90°</span>
+            </button>
+
+            <button
+              type="button"
+              className="thumbnail-btn rotate-btn"
+              onClick={() => onRotatePage(index, 90)}
               title="Rotate 90° clockwise"
             >
               <span className="btn-icon">⟳</span>
