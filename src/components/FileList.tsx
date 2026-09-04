@@ -14,6 +14,7 @@ interface FileListProps {
   isDragging: boolean;
   setIsDragging: (val: boolean) => void;
   onFilesDropped: (paths: string[]) => void;
+  disabled?: boolean;
 }
 
 export const FileList: React.FC<FileListProps> = ({
@@ -27,6 +28,7 @@ export const FileList: React.FC<FileListProps> = ({
   onClearAll,
   isDragging,
   setIsDragging,
+  disabled = false,
 }) => {
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
@@ -59,19 +61,20 @@ export const FileList: React.FC<FileListProps> = ({
             <button
               className="btn-text danger"
               onClick={onClearAll}
+              disabled={disabled}
               title="Remove all files"
             >
               Clear
             </button>
           )}
-          <button className="btn-primary-sm" onClick={onAddFiles}>
+          <button className="btn-primary-sm" onClick={onAddFiles} disabled={disabled}>
             + Add PDFs
           </button>
         </div>
       </div>
 
       {files.length === 0 ? (
-        <div className="empty-dropzone" onClick={onAddFiles}>
+        <div className={`empty-dropzone ${disabled ? "disabled" : ""}`} onClick={disabled ? undefined : onAddFiles}>
           <div className="dropzone-icon">📄</div>
           <p className="dropzone-text">
             <strong>Drop PDF files here</strong> or click to browse
@@ -86,8 +89,8 @@ export const FileList: React.FC<FileListProps> = ({
               return (
                 <li
                   key={`${file.path}-${index}`}
-                  className={`file-item ${isSelected ? "selected" : ""}`}
-                  onClick={() => onSelectFile(index)}
+                  className={`file-item ${isSelected ? "selected" : ""} ${disabled ? "disabled" : ""}`}
+                  onClick={() => !disabled && onSelectFile(index)}
                 >
                   <div className="file-item-left">
                     <span className="file-index">{index + 1}</span>
@@ -113,7 +116,7 @@ export const FileList: React.FC<FileListProps> = ({
                   >
                     <button
                       className="btn-icon"
-                      disabled={index === 0}
+                      disabled={disabled || index === 0}
                       onClick={() => onMoveUp(index)}
                       title="Move up"
                     >
@@ -121,7 +124,7 @@ export const FileList: React.FC<FileListProps> = ({
                     </button>
                     <button
                       className="btn-icon"
-                      disabled={index === files.length - 1}
+                      disabled={disabled || index === files.length - 1}
                       onClick={() => onMoveDown(index)}
                       title="Move down"
                     >
@@ -129,6 +132,7 @@ export const FileList: React.FC<FileListProps> = ({
                     </button>
                     <button
                       className="btn-icon remove"
+                      disabled={disabled}
                       onClick={() => onRemoveFile(index)}
                       title="Remove file"
                     >
@@ -140,7 +144,10 @@ export const FileList: React.FC<FileListProps> = ({
             })}
           </ul>
 
-          <div className="compact-drop-reminder" onClick={onAddFiles}>
+          <div
+            className={`compact-drop-reminder ${disabled ? "disabled" : ""}`}
+            onClick={disabled ? undefined : onAddFiles}
+          >
             <span>+ Add more PDFs</span>
           </div>
         </div>
