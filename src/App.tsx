@@ -21,6 +21,7 @@ export function App() {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [toast, setToast] = useState<ToastNotification | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
+  const [compressError, setCompressError] = useState<string | null>(null);
 
   // Auto dismiss toast after 6s
   useEffect(() => {
@@ -267,6 +268,7 @@ export function App() {
         return;
       }
 
+      setCompressError(null);
       setIsProcessing(true);
       const result = await invoke<CompressResult>("compress_pdf", {
         inputPath: targetFile.path,
@@ -275,6 +277,7 @@ export function App() {
       });
 
       setCompressResult(result);
+      setCompressError(null);
       showToast(
         "success",
         `Compressed successfully! Reduced by ${result.percentage_saved.toFixed(1)}%`
@@ -282,6 +285,7 @@ export function App() {
     } catch (err) {
       const errStr = String(err);
       setCompressResult(null);
+      setCompressError(errStr);
       if (errStr.toLowerCase().includes("already well-compressed")) {
         showToast("info", "This PDF is already well-compressed. No further reduction possible.");
       } else {
@@ -349,17 +353,20 @@ export function App() {
           onSelectFile={(idx) => {
             setSelectedFileIndex(idx);
             setCompressResult(null);
+            setCompressError(null);
           }}
           onAddFiles={handlePickFiles}
           onRemoveFile={(idx) => {
             handleRemoveFile(idx);
             setCompressResult(null);
+            setCompressError(null);
           }}
           onMoveUp={handleMoveUp}
           onMoveDown={handleMoveDown}
           onClearAll={() => {
             handleClearAll();
             setCompressResult(null);
+            setCompressError(null);
           }}
           isDragging={isDragging}
           setIsDragging={setIsDragging}
@@ -384,6 +391,7 @@ export function App() {
               onSelectFile={(idx) => {
                 setSelectedFileIndex(idx);
                 setCompressResult(null);
+                setCompressError(null);
               }}
               isProcessing={isProcessing}
               onSplit={handleSplit}
@@ -398,17 +406,15 @@ export function App() {
               onSelectFile={(idx) => {
                 setSelectedFileIndex(idx);
                 setCompressResult(null);
+                setCompressError(null);
               }}
               isProcessing={isProcessing}
               onCompress={handleCompress}
               compressResult={compressResult}
               onResetResult={() => setCompressResult(null)}
+              compressError={compressError}
+              onClearError={() => setCompressError(null)}
               statusMessage={toast?.type === "success" ? toast.message : null}
-              errorMessage={
-                toast?.type === "error" || toast?.message.includes("already well-compressed")
-                  ? toast.message
-                  : null
-              }
             />
           )}
         </main>

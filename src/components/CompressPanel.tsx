@@ -10,8 +10,9 @@ interface CompressPanelProps {
   onCompress: (quality: CompressionQuality) => void;
   compressResult: CompressResult | null;
   onResetResult: () => void;
+  compressError: string | null;
+  onClearError: () => void;
   statusMessage: string | null;
-  errorMessage: string | null;
 }
 
 interface QualityOption {
@@ -22,25 +23,25 @@ interface QualityOption {
   details: string;
 }
 
-const QUALITY_OPTIONS: QualityOption[] = [
+export const QUALITY_OPTIONS: QualityOption[] = [
   {
     id: "low",
     title: "Low Quality",
     shortDesc: "Smallest size, lower quality",
-    details: "Aggressive compression (JPEG ~35, 1200px max). Ideal for email attachments and rapid sharing.",
+    details: "Aggressive compression (JPEG ~35, 1200px max). Ideal for email attachments, chats, and rapid transfers where minimum file size is crucial.",
   },
   {
     id: "medium",
     title: "Medium Quality",
     badge: "Recommended",
     shortDesc: "Balanced size & clear quality",
-    details: "Optimal balance (JPEG ~65, 2000px max). Drastically reduces size while retaining text and image clarity.",
+    details: "Optimal balance (JPEG ~65, 2000px max). Drastically reduces size while retaining sharp text, graphics, and high-fidelity photo clarity.",
   },
   {
     id: "high",
     title: "High Quality",
     shortDesc: "Highest quality, mild compression",
-    details: "Preserves crisp fine details (JPEG ~85, full resolution). Perfect for archival and professional printing.",
+    details: "Preserves crisp fine details (JPEG ~85, full resolution). Perfect for official presentations, client documents, and print archival.",
   },
 ];
 
@@ -52,21 +53,28 @@ export const CompressPanel: React.FC<CompressPanelProps> = ({
   onCompress,
   compressResult,
   onResetResult,
+  compressError,
+  onClearError,
   statusMessage,
-  errorMessage,
 }) => {
   const [selectedQuality, setSelectedQuality] = useState<CompressionQuality>("medium");
   const selectedFile: PdfFileInfo | undefined = files[selectedIndex];
+
+  const selectedOption =
+    QUALITY_OPTIONS.find((opt) => opt.id === selectedQuality) || QUALITY_OPTIONS[1];
 
   const handleQualityChange = (quality: CompressionQuality) => {
     setSelectedQuality(quality);
     if (compressResult) {
       onResetResult();
     }
+    if (compressError) {
+      onClearError();
+    }
   };
 
   const isWellCompressedMessage =
-    errorMessage && errorMessage.toLowerCase().includes("already well-compressed");
+    compressError && compressError.toLowerCase().includes("already well-compressed");
 
   return (
     <div className="action-card">
@@ -92,6 +100,7 @@ export const CompressPanel: React.FC<CompressPanelProps> = ({
               onChange={(e) => {
                 onSelectFile(Number(e.target.value));
                 if (compressResult) onResetResult();
+                if (compressError) onClearError();
               }}
             >
               {files.map((file, idx) => (
@@ -106,7 +115,7 @@ export const CompressPanel: React.FC<CompressPanelProps> = ({
           <div className="field-group">
             <div className="field-label-row">
               <label className="field-label">Choose Compression Level:</label>
-              <span className="field-hint">Select balance of size vs clarity</span>
+              <span className="field-hint">Click a level to view details</span>
             </div>
 
             <div className="quality-cards-grid">
@@ -135,10 +144,35 @@ export const CompressPanel: React.FC<CompressPanelProps> = ({
                       </div>
                     </div>
                     <p className="quality-short-desc">{opt.shortDesc}</p>
-                    <p className="quality-details-desc">{opt.details}</p>
                   </div>
                 );
               })}
+            </div>
+
+            {/* Dynamic Active Quality Explanation */}
+            <div
+              className="active-quality-explanation"
+              key={`desc-${selectedOption.id}`}
+              role="region"
+              aria-live="polite"
+            >
+              <div className="active-quality-header">
+                <div className="active-quality-header-left">
+                  <span className="active-quality-icon">⚡</span>
+                  <span className="active-quality-name">
+                    {selectedOption.title} Settings
+                  </span>
+                </div>
+                {selectedOption.badge && (
+                  <span className="quality-badge">{selectedOption.badge}</span>
+                )}
+              </div>
+              <p className="active-quality-summary">
+                {selectedOption.shortDesc}
+              </p>
+              <p className="active-quality-details">
+                {selectedOption.details}
+              </p>
             </div>
           </div>
 
@@ -204,31 +238,48 @@ export const CompressPanel: React.FC<CompressPanelProps> = ({
         </div>
       )}
 
-      {/* Already Well-Compressed Alert */}
+      {/* Persistent Inline Well-Compressed Alert */}
       {isWellCompressedMessage && (
         <div className="alert-banner info well-compressed-banner">
           <span className="alert-icon">ℹ️</span>
-          <div>
+          <div className="well-compressed-content">
             <strong>This PDF is already well-compressed.</strong>
             <p className="well-compressed-text">
               Its images and data streams are already optimally encoded. Exporting further would not reduce size without corrupting clarity.
             </p>
           </div>
+          <button
+            className="alert-dismiss-btn"
+            onClick={onClearError}
+            title="Dismiss message"
+          >
+            ✕
+          </button>
         </div>
       )}
 
-      {/* General Success/Error Status */}
+      {/* Persistent General Error Status */}
+      {compressError && !isWellCompressedMessage && (
+        <div className="alert-banner error">
+          <span className="alert-icon">⚠️</span>
+          <div className="alert-error-content">
+            <span>{compressError}</span>
+          </div>
+          <button
+            className="alert-dismiss-btn"
+            onClick={onClearError}
+            title="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* General Success Status Message */}
       {statusMessage && !compressResult && (
         <div className="alert-banner success">
           <span className="alert-icon">✓</span>
           <span>{statusMessage}</span>
-        </div>
-      )}
-
-      {errorMessage && !isWellCompressedMessage && (
-        <div className="alert-banner error">
-          <span className="alert-icon">⚠️</span>
-          <span>{errorMessage}</span>
         </div>
       )}
 
