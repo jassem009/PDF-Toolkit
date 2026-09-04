@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { PdfFileInfo, LoadFilesResult, ActiveTab } from "./types/pdf";
+import { PdfFileInfo, LoadFilesResult, ActiveTab, CompressResult, CompressionQuality } from "./types/pdf";
 import { FileList } from "./components/FileList";
 import { MergePanel } from "./components/MergePanel";
 import { SplitPanel } from "./components/SplitPanel";
+import { CompressPanel } from "./components/CompressPanel";
 import "./App.css";
 
 interface ToastNotification {
@@ -19,6 +20,7 @@ export function App() {
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [toast, setToast] = useState<ToastNotification | null>(null);
+  const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
 
   // Auto dismiss toast after 6s
   useEffect(() => {
@@ -236,6 +238,60 @@ export function App() {
     }
   };
 
+  // Compress Action
+  const handleCompress = async (quality: CompressionQuality) => {
+    const targetFile = files[selectedFileIndex];
+    if (!targetFile) {
+      showToast("error", "Please select a PDF document to compress");
+      return;
+    }
+
+    try {
+      const baseName = targetFile.name.replace(/\.pdf$/i, "");
+      const defaultName = `${baseName}_compressed.pdf`;
+
+      const savePath = await invoke<string | null>("save_pdf_dialog", {
+        defaultName,
+      });
+
+      if (!savePath) return; // User canceled dialog
+
+      // Enforce: Never overwrite the original file
+      if (
+        savePath.toLowerCase().trim() === targetFile.path.toLowerCase().trim()
+      ) {
+        showToast(
+          "error",
+          "Cannot overwrite the original PDF file. Please choose a different file name or location."
+        );
+        return;
+      }
+
+      setIsProcessing(true);
+      const result = await invoke<CompressResult>("compress_pdf", {
+        inputPath: targetFile.path,
+        quality,
+        outputPath: savePath,
+      });
+
+      setCompressResult(result);
+      showToast(
+        "success",
+        `Compressed successfully! Reduced by ${result.percentage_saved.toFixed(1)}%`
+      );
+    } catch (err) {
+      const errStr = String(err);
+      setCompressResult(null);
+      if (errStr.toLowerCase().includes("already well-compressed")) {
+        showToast("info", "This PDF is already well-compressed. No further reduction possible.");
+      } else {
+        showToast("error", `Compression failed: ${errStr}`);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="app-container">
       {/* Toast Notification Popup */}
@@ -257,7 +313,7 @@ export function App() {
           <div className="brand-logo">PDF</div>
           <div className="brand-text">
             <span className="app-name">PDF Toolkit</span>
-            <span className="app-tagline">MVP • Fast & Private PDF Utility</span>
+            <span className="app-tagline">Fast, Private & Local PDF Utility</span>
           </div>
         </div>
 
@@ -275,6 +331,12 @@ export function App() {
           >
             Split PDF
           </button>
+          <button
+            className={`tab-button ${activeTab === "compress" ? "active" : ""}`}
+            onClick={() => setActiveTab("compress")}
+          >
+            Compress PDF
+          </button>
         </nav>
       </header>
 
@@ -284,12 +346,21 @@ export function App() {
         <FileList
           files={files}
           selectedFileIndex={selectedFileIndex}
-          onSelectFile={(idx) => setSelectedFileIndex(idx)}
+          onSelectFile={(idx) => {
+            setSelectedFileIndex(idx);
+            setCompressResult(null);
+          }}
           onAddFiles={handlePickFiles}
-          onRemoveFile={handleRemoveFile}
+          onRemoveFile={(idx) => {
+            handleRemoveFile(idx);
+            setCompressResult(null);
+          }}
           onMoveUp={handleMoveUp}
           onMoveDown={handleMoveDown}
-          onClearAll={handleClearAll}
+          onClearAll={() => {
+            handleClearAll();
+            setCompressResult(null);
+          }}
           isDragging={isDragging}
           setIsDragging={setIsDragging}
           onFilesDropped={handlePathsDropped}
@@ -297,7 +368,7 @@ export function App() {
 
         {/* Right Panel: Active Action Card */}
         <main className="right-panel">
-          {activeTab === "merge" ? (
+          {activeTab === "merge" && (
             <MergePanel
               files={files}
               isProcessing={isProcessing}
@@ -305,15 +376,39 @@ export function App() {
               statusMessage={toast?.type === "success" ? toast.message : null}
               errorMessage={toast?.type === "error" ? toast.message : null}
             />
-          ) : (
+          )}
+          {activeTab === "split" && (
             <SplitPanel
               files={files}
               selectedIndex={selectedFileIndex}
-              onSelectFile={(idx) => setSelectedFileIndex(idx)}
+              onSelectFile={(idx) => {
+                setSelectedFileIndex(idx);
+                setCompressResult(null);
+              }}
               isProcessing={isProcessing}
               onSplit={handleSplit}
               statusMessage={toast?.type === "success" ? toast.message : null}
               errorMessage={toast?.type === "error" ? toast.message : null}
+            />
+          )}
+          {activeTab === "compress" && (
+            <CompressPanel
+              files={files}
+              selectedIndex={selectedFileIndex}
+              onSelectFile={(idx) => {
+                setSelectedFileIndex(idx);
+                setCompressResult(null);
+              }}
+              isProcessing={isProcessing}
+              onCompress={handleCompress}
+              compressResult={compressResult}
+              onResetResult={() => setCompressResult(null)}
+              statusMessage={toast?.type === "success" ? toast.message : null}
+              errorMessage={
+                toast?.type === "error" || toast?.message.includes("already well-compressed")
+                  ? toast.message
+                  : null
+              }
             />
           )}
         </main>
