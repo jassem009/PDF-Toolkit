@@ -33,5 +33,33 @@ export interface ExtractImagesResult {
   extracted_files: string[];
 }
 
-export type ActiveTab = "merge" | "split" | "compress" | "extract-text" | "extract-images";
+export type ActiveTab =
+  | "merge"
+  | "split"
+  | "compress"
+  | "extract-text"
+  | "extract-images"
+  | "page-numbers";
+
 export type CompressionQuality = "low" | "medium" | "high";
+
+export type PageNumberPosition =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+
+export interface PageNumberOptions {
+  position: PageNumberPosition;
+  font_size: number;
+  start_number: number;
+  format: string;
+  margin?: number;
+}
+
+export interface PageNumberResult {
+  pages_processed: number;
+  output_path: string;
+}

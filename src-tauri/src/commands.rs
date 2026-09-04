@@ -43,6 +43,21 @@ pub struct ExtractImagesResult {
     pub extracted_files: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageNumberOptionsDto {
+    pub position: String,
+    pub font_size: f32,
+    pub start_number: u32,
+    pub format: String,
+    pub margin: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageNumberResult {
+    pub pages_processed: usize,
+    pub output_path: String,
+}
+
 #[tauri::command]
 pub fn pick_pdf_files() -> Result<LoadFilesResult, String> {
     let files = rfd::FileDialog::new()
@@ -260,6 +275,35 @@ pub fn pick_folder_dialog() -> Result<Option<String>, String> {
     Ok(folder.map(|p| p.to_string_lossy().to_string()))
 }
 
+#[tauri::command]
+pub fn add_page_numbers(
+    input_path: String,
+    output_path: String,
+    options: PageNumberOptionsDto,
+) -> Result<PageNumberResult, String> {
+    let in_path = PathBuf::from(&input_path);
+    if !in_path.exists() {
+        return Err(format!("File does not exist: {}", input_path));
+    }
+    let out_path = PathBuf::from(&output_path);
+
+    let position: pdf_engine::PageNumberPosition = options.position.parse()?;
+    let engine_options = pdf_engine::PageNumberOptions {
+        position,
+        font_size: options.font_size,
+        start_number: options.start_number,
+        format: options.format,
+        margin: options.margin.unwrap_or(36.0),
+    };
+
+    let stats = pdf_engine::add_page_numbers_to_pdf(&in_path, &out_path, &engine_options)?;
+
+    Ok(PageNumberResult {
+        pages_processed: stats.pages_processed,
+        output_path: stats.output_path,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +478,37 @@ mod tests {
         assert_eq!(stats.images_found, 1);
         assert_eq!(stats.extracted_files.len(), 1);
         assert!(out_folder.join(&stats.extracted_files[0]).exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_add_page_numbers_command() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_cmd_page_numbers");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let in_pdf = temp_dir.join("input.pdf");
+        create_test_image_pdf(&in_pdf);
+
+        let out_pdf = temp_dir.join("output_numbered.pdf");
+        let options = PageNumberOptionsDto {
+            position: "bottom-center".to_string(),
+            font_size: 12.0,
+            start_number: 1,
+            format: "Page X of Y".to_string(),
+            margin: Some(36.0),
+        };
+
+        let result = add_page_numbers(
+            in_pdf.to_string_lossy().to_string(),
+            out_pdf.to_string_lossy().to_string(),
+            options,
+        );
+
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats.pages_processed, 1);
+        assert!(out_pdf.exists());
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

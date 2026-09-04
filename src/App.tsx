@@ -9,6 +9,8 @@ import {
   CompressionQuality,
   ExtractTextResult,
   ExtractImagesResult,
+  PageNumberOptions,
+  PageNumberResult,
 } from "./types/pdf";
 import { FileList } from "./components/FileList";
 import { MergePanel } from "./components/MergePanel";
@@ -16,6 +18,8 @@ import { SplitPanel } from "./components/SplitPanel";
 import { CompressPanel } from "./components/CompressPanel";
 import { ExtractTextPanel } from "./components/ExtractTextPanel";
 import { ExtractImagesPanel } from "./components/ExtractImagesPanel";
+import { PageNumbersPanel } from "./components/PageNumbersPanel";
+import { PageNumbersDialog } from "./components/PageNumbersDialog";
 import "./App.css";
 
 interface ToastNotification {
@@ -36,6 +40,9 @@ export function App() {
   const [extractTextError, setExtractTextError] = useState<string | null>(null);
   const [extractImagesResult, setExtractImagesResult] = useState<ExtractImagesResult | null>(null);
   const [extractImagesError, setExtractImagesError] = useState<string | null>(null);
+  const [pageNumberResult, setPageNumberResult] = useState<PageNumberResult | null>(null);
+  const [pageNumberError, setPageNumberError] = useState<string | null>(null);
+  const [isPageNumbersDialogOpen, setIsPageNumbersDialogOpen] = useState<boolean>(false);
 
   const clearAllResults = useCallback(() => {
     setCompressResult(null);
@@ -44,6 +51,8 @@ export function App() {
     setExtractTextError(null);
     setExtractImagesResult(null);
     setExtractImagesError(null);
+    setPageNumberResult(null);
+    setPageNumberError(null);
   }, []);
 
   // Auto dismiss toast after 6s
@@ -406,6 +415,64 @@ export function App() {
     }
   };
 
+  // Add Page Numbers Action
+  const handlePageNumbers = async (options: PageNumberOptions) => {
+    const targetFile = files[selectedFileIndex];
+    if (!targetFile) {
+      showToast("error", "Please select a PDF document to add page numbers");
+      return;
+    }
+
+    try {
+      const baseName = targetFile.name.replace(/\.pdf$/i, "");
+      const defaultName = `${baseName}_numbered.pdf`;
+
+      const savePath = await invoke<string | null>("save_pdf_dialog", {
+        defaultName,
+      });
+
+      if (!savePath) return; // User canceled dialog
+
+      // Overwrite guard: never overwrite the original
+      if (savePath.toLowerCase().trim() === targetFile.path.toLowerCase().trim()) {
+        showToast(
+          "error",
+          "Cannot overwrite the original PDF file. Please choose a different file name or location."
+        );
+        return;
+      }
+
+      setPageNumberError(null);
+      setIsProcessing(true);
+
+      const result = await invoke<PageNumberResult>("add_page_numbers", {
+        inputPath: targetFile.path,
+        outputPath: savePath,
+        options: {
+          position: options.position,
+          font_size: options.font_size,
+          start_number: options.start_number,
+          format: options.format,
+          margin: options.margin,
+        },
+      });
+
+      setPageNumberResult(result);
+      setPageNumberError(null);
+      showToast(
+        "success",
+        `Successfully stamped page numbers on ${result.pages_processed} pages`
+      );
+    } catch (err) {
+      const errStr = String(err);
+      setPageNumberResult(null);
+      setPageNumberError(errStr);
+      showToast("error", `Adding page numbers failed: ${errStr}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="app-container">
       {/* Toast Notification Popup */}
@@ -462,6 +529,12 @@ export function App() {
             onClick={() => setActiveTab("extract-images")}
           >
             Extract Images
+          </button>
+          <button
+            className={`tab-button ${activeTab === "page-numbers" ? "active" : ""}`}
+            onClick={() => setActiveTab("page-numbers")}
+          >
+            Add Page Numbers
           </button>
         </nav>
       </header>
@@ -568,8 +641,46 @@ export function App() {
               statusMessage={toast?.type === "success" ? toast.message : null}
             />
           )}
+          {activeTab === "page-numbers" && (
+            <PageNumbersPanel
+              files={files}
+              selectedIndex={selectedFileIndex}
+              onSelectFile={(idx) => {
+                setSelectedFileIndex(idx);
+                clearAllResults();
+              }}
+              isProcessing={isProcessing}
+              onAddPageNumbers={handlePageNumbers}
+              onCancel={() => {
+                clearAllResults();
+                setActiveTab("merge");
+              }}
+              statusMessage={toast?.type === "success" ? toast.message : null}
+              errorMessage={pageNumberError}
+              pageNumberResult={pageNumberResult}
+              onResetResult={() => setPageNumberResult(null)}
+              onOpenDialog={() => setIsPageNumbersDialogOpen(true)}
+            />
+          )}
         </main>
       </div>
+
+      {/* Optional Page Numbers Modal Dialog */}
+      <PageNumbersDialog
+        isOpen={isPageNumbersDialogOpen}
+        onClose={() => setIsPageNumbersDialogOpen(false)}
+        files={files}
+        selectedIndex={selectedFileIndex}
+        onSelectFile={(idx) => {
+          setSelectedFileIndex(idx);
+          clearAllResults();
+        }}
+        isProcessing={isProcessing}
+        onAddPageNumbers={async (opts) => {
+          await handlePageNumbers(opts);
+          setIsPageNumbersDialogOpen(false);
+        }}
+      />
     </div>
   );
 }
