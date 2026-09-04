@@ -1079,12 +1079,21 @@ pub fn helvetica_text_width(text: &str, font_size: f32) -> f32 {
 }
 
 /// Helper function to format page numbers based on a custom template.
-pub fn format_page_number(template: &str, current_page_num: u32, total_pages: usize) -> String {
+pub fn format_page_number(
+    template: &str,
+    current_page_num: u32,
+    total_pages: usize,
+    start_number: u32,
+) -> String {
     let trimmed = template.trim();
     if trimmed.is_empty() {
         return current_page_num.to_string();
     }
 
+    let end_number = start_number
+        .saturating_add(total_pages as u32)
+        .saturating_sub(1)
+        .max(1);
     let mut result = trimmed.to_string();
 
     // Replace explicit token placeholders
@@ -1092,15 +1101,15 @@ pub fn format_page_number(template: &str, current_page_num: u32, total_pages: us
     result = result.replace("{PAGE}", &current_page_num.to_string());
     result = result.replace("{p}", &current_page_num.to_string());
     result = result.replace("{n}", &current_page_num.to_string());
-    result = result.replace("{total}", &total_pages.to_string());
-    result = result.replace("{TOTAL}", &total_pages.to_string());
-    result = result.replace("{count}", &total_pages.to_string());
+    result = result.replace("{total}", &end_number.to_string());
+    result = result.replace("{TOTAL}", &end_number.to_string());
+    result = result.replace("{count}", &end_number.to_string());
 
     // Replace standalone token words 'X' / 'x' and 'Y' / 'y'
     result = replace_standalone_token(&result, 'X', &current_page_num.to_string());
     result = replace_standalone_token(&result, 'x', &current_page_num.to_string());
-    result = replace_standalone_token(&result, 'Y', &total_pages.to_string());
-    result = replace_standalone_token(&result, 'y', &total_pages.to_string());
+    result = replace_standalone_token(&result, 'Y', &end_number.to_string());
+    result = replace_standalone_token(&result, 'y', &end_number.to_string());
 
     result
 }
@@ -1175,6 +1184,28 @@ fn resolve_page_mediabox(doc: &Document, mut current_id: ObjectId) -> (f64, f64,
         break;
     }
     (0.0, 0.0, 612.0, 792.0)
+}
+
+fn resolve_page_rotation(doc: &Document, mut current_id: ObjectId) -> i64 {
+    for _ in 0..10 {
+        if let Ok(obj) = doc.get_object(current_id) {
+            if let Ok(dict) = obj.as_dict() {
+                if let Ok(rot_obj) = dict.get(b"Rotate") {
+                    if let Ok(rot) = rot_obj.as_i64() {
+                        return ((rot % 360) + 360) % 360;
+                    }
+                }
+                if let Ok(parent_obj) = dict.get(b"Parent") {
+                    if let Ok(parent_id) = parent_obj.as_reference() {
+                        current_id = parent_id;
+                        continue;
+                    }
+                }
+            }
+        }
+        break;
+    }
+    0
 }
 
 fn resolve_array_ref<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Vec<Object>> {
@@ -1419,58 +1450,112 @@ pub fn add_page_numbers_to_pdf(
     // 5. Process each page in ascending order
     for (page_idx, (page_num, page_id)) in pages.into_iter().enumerate() {
         let (mb_x0, mb_y0, mb_x1, mb_y1) = resolve_page_mediabox(&doc, page_id);
-        let page_left = mb_x0.min(mb_x1) as f32;
-        let page_bottom = mb_y0.min(mb_y1) as f32;
-        let page_width = (mb_x1 - mb_x0).abs() as f32;
-        let page_height = (mb_y1 - mb_y0).abs() as f32;
+        let x_min = mb_x0.min(mb_x1) as f32;
+        let x_max = mb_x0.max(mb_x1) as f32;
+        let y_min = mb_y0.min(mb_y1) as f32;
+        let y_max = mb_y0.max(mb_y1) as f32;
+        let rot = resolve_page_rotation(&doc, page_id);
+
+        let (cm, visual_w, visual_h) = match rot {
+            90 => (
+                [0.0, 1.0, -1.0, 0.0, x_max, y_min],
+                y_max - y_min,
+                x_max - x_min,
+            ),
+            180 => (
+                [-1.0, 0.0, 0.0, -1.0, x_max, y_max],
+                x_max - x_min,
+                y_max - y_min,
+            ),
+            270 => (
+                [0.0, -1.0, 1.0, 0.0, x_min, y_max],
+                y_max - y_min,
+                x_max - x_min,
+            ),
+            _ => (
+                [1.0, 0.0, 0.0, 1.0, x_min, y_min],
+                x_max - x_min,
+                y_max - y_min,
+            ),
+        };
 
         ensure_font_in_page_resources(&mut doc, page_id, font_alias, font_id)?;
 
         let current_page_num = start_number + (page_idx as u32);
-        let text = format_page_number(&options.format, current_page_num, total_pages);
+        let text = format_page_number(&options.format, current_page_num, total_pages, start_number);
         let text_width = helvetica_text_width(&text, font_size);
 
         let x = match options.position {
-            PageNumberPosition::TopLeft | PageNumberPosition::BottomLeft => page_left + margin,
+            PageNumberPosition::TopLeft | PageNumberPosition::BottomLeft => margin,
             PageNumberPosition::TopCenter | PageNumberPosition::BottomCenter => {
-                page_left + ((page_width - text_width) / 2.0).max(margin)
+                ((visual_w - text_width) / 2.0).max(margin)
             }
             PageNumberPosition::TopRight | PageNumberPosition::BottomRight => {
-                (page_left + page_width - margin - text_width).max(page_left + margin)
+                (visual_w - margin - text_width).max(margin)
             }
         };
 
         let y = match options.position {
             PageNumberPosition::TopLeft
             | PageNumberPosition::TopCenter
-            | PageNumberPosition::TopRight => page_bottom + page_height - margin - font_size,
+            | PageNumberPosition::TopRight => (visual_h - margin - font_size).max(margin),
             PageNumberPosition::BottomLeft
             | PageNumberPosition::BottomCenter
-            | PageNumberPosition::BottomRight => page_bottom + margin,
+            | PageNumberPosition::BottomRight => margin,
         };
+
+        let pad_x = 4.0f32;
+        let pad_y = 2.5f32;
+        let rect_x = (x - pad_x).max(0.0);
+        let rect_y = (y - 0.25 * font_size - pad_y).max(0.0);
+        let rect_w = text_width + 2.0 * pad_x;
+        let rect_h = font_size + 2.0 * pad_y;
 
         let stamp_content = Content {
             operations: vec![
                 Operation::new("q", vec![]),
-                Operation::new("rg", vec![0.into(), 0.into(), 0.into()]),
-                Operation::new("RG", vec![0.into(), 0.into(), 0.into()]),
+                Operation::new(
+                    "cm",
+                    vec![
+                        (cm[0] as f64).into(),
+                        (cm[1] as f64).into(),
+                        (cm[2] as f64).into(),
+                        (cm[3] as f64).into(),
+                        (cm[4] as f64).into(),
+                        (cm[5] as f64).into(),
+                    ],
+                ),
+                // Opaque white background rect to avoid collision with underlying text/headers
+                Operation::new("rg", vec![1.0f64.into(), 1.0f64.into(), 1.0f64.into()]),
+                Operation::new(
+                    "re",
+                    vec![
+                        (rect_x as f64).into(),
+                        (rect_y as f64).into(),
+                        (rect_w as f64).into(),
+                        (rect_h as f64).into(),
+                    ],
+                ),
+                Operation::new("f", vec![]),
+                // Crisp black text
+                Operation::new("rg", vec![0.0f64.into(), 0.0f64.into(), 0.0f64.into()]),
                 Operation::new("BT", vec![]),
                 Operation::new(
                     "Tf",
                     vec![
                         Object::Name(font_alias.as_bytes().to_vec()),
-                        font_size.into(),
+                        (font_size as f64).into(),
                     ],
                 ),
                 Operation::new(
                     "Tm",
                     vec![
-                        1.into(),
-                        0.into(),
-                        0.into(),
-                        1.into(),
-                        x.into(),
-                        y.into(),
+                        1.0f64.into(),
+                        0.0f64.into(),
+                        0.0f64.into(),
+                        1.0f64.into(),
+                        (x as f64).into(),
+                        (y as f64).into(),
                     ],
                 ),
                 Operation::new("Tj", vec![Object::string_literal(text)]),
@@ -1988,13 +2073,95 @@ mod tests {
 
     #[test]
     fn test_format_page_number_templates() {
-        assert_eq!(format_page_number("Page X of Y", 1, 5), "Page 1 of 5");
-        assert_eq!(format_page_number("X", 3, 10), "3");
-        assert_eq!(format_page_number("Page X", 2, 8), "Page 2");
-        assert_eq!(format_page_number("X / Y", 4, 12), "4 / 12");
-        assert_eq!(format_page_number("- X -", 1, 1), "- 1 -");
-        assert_eq!(format_page_number("{page} of {total}", 5, 20), "5 of 20");
-        assert_eq!(format_page_number("", 7, 10), "7");
+        assert_eq!(format_page_number("Page X of Y", 1, 5, 1), "Page 1 of 5");
+        assert_eq!(format_page_number("X", 3, 10, 1), "3");
+        assert_eq!(format_page_number("Page X", 2, 8, 1), "Page 2");
+        assert_eq!(format_page_number("X / Y", 4, 12, 1), "4 / 12");
+        assert_eq!(format_page_number("- X -", 1, 1, 1), "- 1 -");
+        assert_eq!(format_page_number("{page} of {total}", 5, 20, 1), "5 of 20");
+        assert_eq!(format_page_number("", 7, 10, 1), "7");
+    }
+
+    #[test]
+    fn test_format_page_number_with_start_offset() {
+        // 5 pages, starting at 5: page 1 = 5 of 9, page 3 = 7 of 9, page 5 = 9 of 9
+        assert_eq!(format_page_number("Page X of Y", 5, 5, 5), "Page 5 of 9");
+        assert_eq!(format_page_number("Page X of Y", 7, 5, 5), "Page 7 of 9");
+        assert_eq!(format_page_number("Page X of Y", 9, 5, 5), "Page 9 of 9");
+        assert_eq!(format_page_number("X / Y", 7, 5, 5), "7 / 9");
+        assert_eq!(format_page_number("{page} of {total}", 7, 5, 5), "7 of 9");
+    }
+
+    #[test]
+    fn test_add_page_numbers_rotated_landscape() {
+        let temp_dir = std::env::temp_dir().join("pdf_toolkit_test_pn_landscape");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let doc_path = temp_dir.join("landscape_rot90.pdf");
+        let out_path = temp_dir.join("landscape_out.pdf");
+
+        // Create PDF with /Rotate 90
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! { "F1" => font_id },
+        });
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 16.into()]),
+                Operation::new("Td", vec![100.into(), 300.into()]),
+                Operation::new("Tj", vec![Object::string_literal("Landscape page")]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Rotate" => 90,
+        });
+        let pages_dict = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&doc_path).unwrap();
+
+        let options = PageNumberOptions {
+            position: PageNumberPosition::BottomRight,
+            font_size: 14.0,
+            start_number: 1,
+            format: "Page X of Y".to_string(),
+            margin: 36.0,
+        };
+
+        let stats = add_page_numbers_to_pdf(&doc_path, &out_path, &options).unwrap();
+        assert_eq!(stats.pages_processed, 1);
+        assert!(out_path.exists());
+
+        // Verify content extraction picks up the stamped text
+        let txt_path = temp_dir.join("landscape_extracted.txt");
+        let txt_stats = extract_text_content(&out_path, &txt_path).unwrap();
+        assert!(txt_stats.characters_extracted > 0);
+        let extracted_str = std::fs::read_to_string(&txt_path).unwrap();
+        assert!(extracted_str.contains("Page 1 of 1"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]

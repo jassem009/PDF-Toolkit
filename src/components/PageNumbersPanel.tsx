@@ -56,7 +56,7 @@ export const PageNumbersPanel: React.FC<PageNumbersPanelProps> = ({
 
   // Calculate live preview text for page 1
   const totalPages = selectedFile ? selectedFile.page_count : 1;
-  const previewText = evaluatePageNumberFormat(format, startNumber, totalPages);
+  const previewText = evaluatePageNumberFormat(format, startNumber, totalPages, startNumber);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

@@ -49,7 +49,7 @@ export const PageNumbersDialog: React.FC<PageNumbersDialogProps> = ({
   if (!isOpen) return null;
 
   const totalPages = selectedFile ? selectedFile.page_count : 1;
-  const previewText = evaluatePageNumberFormat(format, startNumber, totalPages);
+  const previewText = evaluatePageNumberFormat(format, startNumber, totalPages, startNumber);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
